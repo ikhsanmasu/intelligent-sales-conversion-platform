@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from pydantic import Field
 
 
 class QueryRequest(BaseModel):
@@ -8,5 +9,7 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     status: str
     response: str
-    sql: str
+    sql: str = ""
     row_count: int
+    intent: str = ""
+    rows: list[dict] = Field(default_factory=list)

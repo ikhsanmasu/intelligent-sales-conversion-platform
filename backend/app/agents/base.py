@@ -12,7 +12,7 @@ class AgentResult:
 
 
 class BaseAgent(ABC):
-    def __init__(self, llm: BaseLLM):
+    def __init__(self, llm: BaseLLM | None = None):
         self.llm = llm
 
     @abstractmethod

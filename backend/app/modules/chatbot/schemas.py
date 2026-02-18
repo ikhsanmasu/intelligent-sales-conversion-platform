@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -57,6 +57,7 @@ class SaveMessagesRequest(BaseModel):
     user_message: str
     assistant_content: str
     assistant_thinking: Optional[str] = None
+    assistant_metadata: dict[str, Any] | None = None
 
 
 class HistoryEntry(BaseModel):

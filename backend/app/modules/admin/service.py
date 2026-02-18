@@ -16,7 +16,7 @@ _CONFIG_FALLBACK: dict[str, str] = {
 }
 
 SECRET_FIELDS = {"api_key", "password"}
-BLOCKED_CONFIG_GROUPS = {"clickhouse"}
+BLOCKED_CONFIG_GROUPS: set[str] = set()
 
 
 def _is_secret(field: str) -> bool:

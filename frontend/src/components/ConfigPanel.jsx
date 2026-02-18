@@ -11,35 +11,7 @@ const GROUP_META = {
       model: { label: "Model", type: "select" },
     },
   },
-  llm_database: {
-    label: "Model",
-    fields: {
-      provider: { label: "Provider", type: "select" },
-      model: { label: "Model", type: "select" },
-    },
-  },
-  llm_browser: {
-    label: "Model",
-    fields: {
-      provider: { label: "Provider", type: "select" },
-      model: { label: "Model", type: "select" },
-    },
-  },
-  llm_chart: {
-    label: "Model",
-    fields: {
-      provider: { label: "Provider", type: "select" },
-      model: { label: "Model", type: "select" },
-    },
-  },
   llm_memory: {
-    label: "Model",
-    fields: {
-      provider: { label: "Provider", type: "select" },
-      model: { label: "Model", type: "select" },
-    },
-  },
-  llm_report: {
     label: "Model",
     fields: {
       provider: { label: "Provider", type: "select" },
@@ -58,35 +30,11 @@ const GROUP_META = {
 const AGENT_SECTIONS = [
   {
     key: "planner",
-    title: "Planner Agent",
+    title: "Sales Agent",
     llmGroup: "llm_planner",
     promptAgent: "planner",
     toggleKey: "planner",
     toggleEnabled: false,
-  },
-  {
-    key: "database",
-    title: "Database Agent",
-    llmGroup: "llm_database",
-    promptAgent: "database",
-    toggleKey: "database",
-    toggleEnabled: true,
-  },
-  {
-    key: "browser",
-    title: "Browser Agent",
-    llmGroup: "llm_browser",
-    promptAgent: "browser",
-    toggleKey: "browser",
-    toggleEnabled: true,
-  },
-  {
-    key: "chart",
-    title: "Chart Agent",
-    llmGroup: "llm_chart",
-    promptAgent: "chart",
-    toggleKey: "chart",
-    toggleEnabled: true,
   },
   {
     key: "memory",
@@ -97,12 +45,22 @@ const AGENT_SECTIONS = [
     toggleEnabled: true,
   },
   {
-    key: "report",
-    title: "Report Agent",
-    llmGroup: "llm_report",
-    promptAgent: "report",
-    toggleKey: "report",
+    key: "database",
+    title: "Database Agent",
+    llmGroup: null,
+    promptAgent: null,
+    toggleKey: "database",
     toggleEnabled: true,
+    showPrompts: false,
+  },
+  {
+    key: "vector",
+    title: "Vector Agent",
+    llmGroup: null,
+    promptAgent: null,
+    toggleKey: "vector",
+    toggleEnabled: true,
+    showPrompts: false,
   },
 ];
 
@@ -154,15 +112,7 @@ export default function ConfigPanel() {
 
   useEffect(() => {
     if (!llmOptions.providers.length) return;
-    const llmGroups = [
-      "llm_planner",
-      "llm_database",
-      "llm_browser",
-      "llm_chart",
-      "llm_memory",
-      "llm_report",
-      "llm",
-    ];
+    const llmGroups = ["llm_planner", "llm_memory", "llm"];
     setConfigs((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -326,10 +276,12 @@ export default function ConfigPanel() {
                         </div>
                       </div>
                     )}
-                    <div className="agent-prompts">
-                      <div className="agent-prompts-title">Prompts</div>
-                      <PromptsPanel showTitle={false} agentFilter={agent.promptAgent} />
-                    </div>
+                    {agent.showPrompts === false ? null : (
+                      <div className="agent-prompts">
+                        <div className="agent-prompts-title">Prompts</div>
+                        <PromptsPanel showTitle={false} agentFilter={agent.promptAgent} />
+                      </div>
+                    )}
                   </div>
                 </div>
               );

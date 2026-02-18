@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 DB_STARTUP_MAX_ATTEMPTS = 30
 DB_STARTUP_RETRY_DELAY_SECONDS = 1.0
 
-clickhouse_engine = create_engine(settings.clickhouse_url)
 app_database_url = settings.app_database_url
 
 app_engine = create_engine(app_database_url)
@@ -45,42 +44,8 @@ def _wait_for_connection(engine, name: str) -> None:
 
 
 def ensure_app_database_exists() -> None:
-    """Ensure the target application database exists before creating tables."""
-    url = app_engine.url
-
-    backend_name = url.get_backend_name()
-    if backend_name != "postgresql":
-        raise RuntimeError(
-            f"Unsupported app database backend '{backend_name}'. PostgreSQL is required."
-        )
-
-    # For PostgreSQL, create database if it does not exist yet.
-    database_name = url.database
-    if not database_name:
-        return
-
-    admin_url = url.set(database="postgres")
-    admin_engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-    try:
-        _wait_for_connection(admin_engine, "postgres admin database")
-
-        with admin_engine.connect() as conn:
-            exists = conn.execute(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"),
-                {"name": database_name},
-            ).scalar()
-
-            if not exists:
-                safe_database_name = database_name.replace('"', '""')
-                conn.execute(text(f'CREATE DATABASE "{safe_database_name}"'))
-                logger.info(
-                    "Created PostgreSQL database '%s' because it did not exist.",
-                    database_name,
-                )
-    finally:
-        admin_engine.dispose()
-
-    _wait_for_connection(app_engine, f"application database '{database_name}'")
+    """Ensure the application database connection is reachable."""
+    _wait_for_connection(app_engine, "application database")
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -92,7 +57,10 @@ def init_app_database() -> None:
     logger.info("Initializing app database on %s", _safe_url(app_engine.url))
     ensure_app_database_exists()
 
+    from app.agents.database.models import SalesProduct
+    from app.agents.database.store import ensure_default_sales_product
     from app.modules.admin.models import AdminConfig, PromptOverride
+    from app.modules.billing.models import LLMUsageEvent
     from app.modules.chatbot.models import (
         Conversation,
         ConversationHistory,
@@ -106,13 +74,15 @@ def init_app_database() -> None:
         Conversation,
         ConversationMessage,
         ConversationHistory,
+        LLMUsageEvent,
         AgentMemory,
+        SalesProduct,
     )
     SQLModel.metadata.create_all(app_engine)
+    ensure_default_sales_product()
     logger.info("Application tables are ready on %s", _safe_url(app_engine.url))
 
 
 def close_app_database() -> None:
     app_engine.dispose()
-    clickhouse_engine.dispose()
-    logger.info("Database engines disposed.")
+    logger.info("Application database engine disposed.")

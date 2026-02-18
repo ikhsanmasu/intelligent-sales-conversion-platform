@@ -1,164 +1,140 @@
-﻿import json
-import logging
+import math
 import re
+from collections import Counter
 from collections.abc import Generator
-from typing import Any
 
 from app.agents.base import AgentResult, BaseAgent
-from app.core.llm.base import BaseLLM
-from app.core.vectordb import create_vectordb
+from app.agents.database.store import get_primary_product
+from app.agents.vector.store import VectorDocument
 
-logger = logging.getLogger(__name__)
+
+def _tokenize(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _tf(tokens: list[str]) -> Counter:
+    return Counter(tokens)
+
+
+def _cosine_similarity(left: Counter, right: Counter) -> float:
+    if not left or not right:
+        return 0.0
+
+    dot = 0.0
+    for term, value in left.items():
+        dot += float(value) * float(right.get(term, 0))
+
+    left_norm = math.sqrt(sum(float(v * v) for v in left.values()))
+    right_norm = math.sqrt(sum(float(v * v) for v in right.values()))
+    denom = left_norm * right_norm
+    if denom <= 0:
+        return 0.0
+    return dot / denom
+
+
+def _build_documents() -> list[VectorDocument]:
+    product = get_primary_product()
+    if product is None:
+        return []
+
+    documents = [
+        VectorDocument(
+            doc_id="product.overview",
+            text=(
+                f"Produk: {product.name}. Harga: Rp{product.price_idr:,}. "
+                f"Kemasan: {product.pack_size}. "
+                f"BPOM: {product.bpom}. Halal: {product.halal_mui}."
+            ).replace(",", "."),
+            metadata={"type": "overview"},
+        ),
+        VectorDocument(
+            doc_id="product.benefits",
+            text=product.benefits,
+            metadata={"type": "benefits"},
+        ),
+        VectorDocument(
+            doc_id="product.usage",
+            text=product.usage_instructions,
+            metadata={"type": "usage"},
+        ),
+        VectorDocument(
+            doc_id="product.policy",
+            text=product.complaint_policy,
+            metadata={"type": "policy"},
+        ),
+        VectorDocument(
+            doc_id="product.testimony.1",
+            text=product.testimony_1,
+            metadata={"type": "testimony"},
+        ),
+        VectorDocument(
+            doc_id="product.testimony.2",
+            text=product.testimony_2,
+            metadata={"type": "testimony"},
+        ),
+    ]
+
+    return [doc for doc in documents if doc.text and doc.text.strip()]
+
+
+def _format_matches(matches: list[dict]) -> str:
+    if not matches:
+        return "(no matches)"
+
+    lines = ["Dokumen relevan:"]
+    for item in matches:
+        lines.append(
+            f"- [{item['doc_id']}] (score={item['score']:.3f}) {item['text']}"
+        )
+    return "\n".join(lines)
 
 
 class VectorAgent(BaseAgent):
-    def __init__(self, llm: BaseLLM):
-        super().__init__(llm)
-        self._vectordb = create_vectordb()
-
-    @staticmethod
-    def _strip_json_fence(raw_text: str) -> str:
-        raw = raw_text.strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-        return raw
-
-    def _parse_instruction(self, raw_text: str) -> dict[str, Any]:
-        raw = self._strip_json_fence(raw_text)
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON instruction: {exc}") from exc
-
-        if not isinstance(payload, dict):
-            raise ValueError("Instruction must be a JSON object.")
-
-        vector = payload.get("vector")
-        if not isinstance(vector, list) or not all(isinstance(v, (int, float)) for v in vector):
-            raise ValueError("Instruction must include a numeric 'vector' array.")
-
-        top_k = payload.get("top_k", 5)
-        if not isinstance(top_k, int) or top_k <= 0:
-            top_k = 5
-
-        collection = payload.get("collection") or ""
-        if collection is not None and not isinstance(collection, str):
-            raise ValueError("'collection' must be a string when provided.")
-
-        filter_payload = payload.get("filter")
-        if filter_payload is not None and not isinstance(filter_payload, dict):
-            raise ValueError("'filter' must be an object when provided.")
-
-        return {
-            "collection": collection,
-            "vector": vector,
-            "top_k": top_k,
-            "filter": filter_payload,
-        }
-
-    @staticmethod
-    def _format_matches(matches: list[dict[str, Any]]) -> str:
-        if not matches:
-            return "(no matches)"
-
-        lines = ["id | score | document | metadata", "---|---|---|---"]
-        for match in matches:
-            doc = match.get("document")
-            if isinstance(doc, str) and len(doc) > 160:
-                doc = doc[:160].rstrip() + "..."
-            metadata = match.get("metadata")
-            if metadata is not None:
-                try:
-                    metadata = json.dumps(metadata, ensure_ascii=True)
-                except TypeError:
-                    metadata = str(metadata)
-            lines.append(
-                f"{match.get('id')} | {match.get('score')} | {doc or '-'} | {metadata or '-'}"
-            )
-        return "\n".join(lines)
+    def __init__(self):
+        super().__init__(llm=None)
 
     def execute(self, input_text: str, context: dict | None = None) -> AgentResult:
-        try:
-            instruction = self._parse_instruction(input_text)
-        except ValueError as exc:
-            return AgentResult(output=f"Error: {exc}", metadata={"error": str(exc)})
+        context = context or {}
+        top_k = int(context.get("top_k") or 3)
+        top_k = max(1, min(top_k, 8))
 
-        try:
-            results = self._vectordb.query(
-                collection=instruction["collection"],
-                vector=instruction["vector"],
-                top_k=instruction["top_k"],
-                filter=instruction["filter"],
+        docs = _build_documents()
+        if not docs:
+            return AgentResult(
+                output="Error: knowledge vector belum tersedia.",
+                metadata={"error": "empty_knowledge"},
             )
-        except Exception as exc:
-            logger.exception("Vector DB query failed")
-            return AgentResult(output=f"Error: {exc}", metadata={"error": str(exc)})
 
-        matches = [
-            {
-                "id": match.id,
-                "score": match.score,
-                "metadata": match.metadata,
-                "document": match.document,
-            }
-            for match in results
-        ]
-        output = self._format_matches(matches)
+        query_tf = _tf(_tokenize(input_text))
+        ranked: list[dict] = []
+
+        for doc in docs:
+            score = _cosine_similarity(query_tf, _tf(_tokenize(doc.text)))
+            ranked.append(
+                {
+                    "doc_id": doc.doc_id,
+                    "score": float(score),
+                    "text": doc.text,
+                    "metadata": doc.metadata,
+                }
+            )
+
+        ranked.sort(key=lambda item: item["score"], reverse=True)
+        selected = [item for item in ranked[:top_k] if item["score"] > 0]
+        if not selected:
+            selected = ranked[:top_k]
+
         return AgentResult(
-            output=output,
+            output=_format_matches(selected),
             metadata={
-                "count": len(matches),
-                "collection": instruction["collection"],
-                "top_k": instruction["top_k"],
+                "count": len(selected),
+                "top_k": top_k,
+                "matches": selected,
+                "source": "sales_knowledge",
             },
         )
 
     def execute_stream(self, input_text: str, context: dict | None = None) -> Generator[dict, None, None]:
-        yield {"type": "thinking", "content": "Memproses instruksi vector...\n"}
-        try:
-            instruction = self._parse_instruction(input_text)
-        except ValueError as exc:
-            yield {"type": "content", "content": f"Error: {exc}"}
-            return
-
-        yield {
-            "type": "thinking",
-            "content": (
-                "Menjalankan query vector\n"
-                f"Collection: {instruction['collection'] or '-'}\n"
-                f"Top K: {instruction['top_k']}\n\n"
-            ),
-        }
-
-        try:
-            results = self._vectordb.query(
-                collection=instruction["collection"],
-                vector=instruction["vector"],
-                top_k=instruction["top_k"],
-                filter=instruction["filter"],
-            )
-        except Exception as exc:
-            logger.exception("Vector DB query failed")
-            yield {"type": "content", "content": f"Error: {exc}"}
-            return
-
-        matches = [
-            {
-                "id": match.id,
-                "score": match.score,
-                "metadata": match.metadata,
-                "document": match.document,
-            }
-            for match in results
-        ]
-        output = self._format_matches(matches)
-        result = AgentResult(
-            output=output,
-            metadata={
-                "count": len(matches),
-                "collection": instruction["collection"],
-                "top_k": instruction["top_k"],
-            },
-        )
+        yield {"type": "thinking", "content": "Mencari dokumen paling relevan di knowledge vector...\n"}
+        result = self.execute(input_text=input_text, context=context)
         yield {"type": "_result", "data": result}

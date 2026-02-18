@@ -136,7 +136,9 @@ class ChatRepository:
         user_message: str,
         assistant_content: str,
         assistant_thinking: str | None = None,
+        assistant_metadata: dict | None = None,
     ) -> bool:
+        _ = assistant_metadata
         with Session(self.engine) as session:
             conversation = session.exec(
                 select(Conversation)

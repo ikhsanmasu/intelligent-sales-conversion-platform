@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import Sidebar from "./components/Sidebar";
 import Playground from "./components/Playground";
 import ConfigPanel from "./components/ConfigPanel";
+import BillingPanel from "./components/BillingPanel";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const USER_ID = "0";
@@ -188,6 +189,8 @@ export default function App() {
     switch (activeTab) {
       case "config":
         return <ConfigPanel />;
+      case "billing":
+        return <BillingPanel userId={USER_ID} />;
       default:
         return (
           <Playground

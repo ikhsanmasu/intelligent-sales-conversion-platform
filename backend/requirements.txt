@@ -7,11 +7,5 @@ python-dotenv
 pydantic
 pydantic-settings
 pytest
-httpx
 sqlmodel
-clickhouse-connect
 psycopg[binary]
-pandas
-numpy
-fpdf2
-pymilvus

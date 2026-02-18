@@ -13,6 +13,7 @@ export default function Sidebar({
 }) {
   const navItems = [
     { key: "chat", label: "Chats", icon: <ChatIcon /> },
+    { key: "billing", label: "Billing", icon: <BillingIcon /> },
     { key: "config", label: "Config", icon: <ConfigIcon /> },
   ];
 
@@ -33,7 +34,7 @@ export default function Sidebar({
             <span className="brand-logo">
               <BrandLogo />
             </span>
-            <span className="brand-label">M Agent</span>
+            <span className="brand-label">Sales Agent</span>
           </button>
         )}
       </div>
@@ -208,6 +209,24 @@ function ConfigIcon() {
         strokeWidth="1.4"
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function BillingIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+      <path
+        d="M4.5 7.5C4.5 6.4 5.4 5.5 6.5 5.5H17.5C18.6 5.5 19.5 6.4 19.5 7.5V16.5C19.5 17.6 18.6 18.5 17.5 18.5H6.5C5.4 18.5 4.5 17.6 4.5 16.5V7.5Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      />
+      <path
+        d="M4.5 9.5H19.5M8 14H12.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
       />
     </svg>
   );

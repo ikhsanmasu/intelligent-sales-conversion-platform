@@ -86,6 +86,7 @@ async def save_messages_endpoint(
         request.user_message,
         request.assistant_content,
         request.assistant_thinking,
+        request.assistant_metadata,
     )
     if not saved:
         raise HTTPException(status_code=404, detail="Conversation not found")

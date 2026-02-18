@@ -16,84 +16,75 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""
     XAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
-
-    # Vector DB
-    VECTORDB_PROVIDER: str = "memory"
-    VECTORDB_URL: str = ""
-    VECTORDB_API_KEY: str = ""
-    VECTORDB_COLLECTION: str = "default"
-    VECTORDB_INDEX: str = ""
-    VECTORDB_NAMESPACE: str = ""
-
-    # Web Search
-    WEB_SEARCH_PROVIDER: str = "serper"
-    WEB_SEARCH_API_KEY: str = ""
-    WEB_SEARCH_API_URL: str = ""
-    WEB_BROWSE_MAX_RESULTS: int = 5
-    WEB_BROWSE_MAX_PAGES: int = 3
-    WEB_BROWSE_MAX_CHARS: int = 4000
-    WEB_BROWSE_TIMEOUT: int = 12
-    WEB_BROWSE_USER_AGENT: str = "agentic-chatbot/1.0"
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    WHATSAPP_VERIFY_TOKEN: str = ""
+    WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_API_VERSION: str = "v22.0"
 
     # Application DB (chat history persistence)
     APP_DATABASE_URL: str = ""
-    DATABASE_URL: str = ""
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "agentic_chatbot"
-    POSTGRES_DRIVER: str = "psycopg"
+    POSTGRES_SSLMODE: str = "disable"
 
-    # ClickHouse
-    CLICKHOUSE_HOST: str = "192.168.100.19"
-    CLICKHOUSE_PORT: int = 8722
-    CLICKHOUSE_USER: str = "admin"
-    CLICKHOUSE_PASSWORD: str = "adminadmin123"
-    CLICKHOUSE_DB: str = "default"
-
-    @property
-    def clickhouse_url(self) -> str:
-        return (
-            f"clickhousedb://{self.CLICKHOUSE_USER}:{self.CLICKHOUSE_PASSWORD}"
-            f"@{self.CLICKHOUSE_HOST}:{self.CLICKHOUSE_PORT}/{self.CLICKHOUSE_DB}"
+    @staticmethod
+    def _is_placeholder_database_url(value: str) -> bool:
+        normalized = value.lower()
+        placeholder_tokens = (
+            "project-ref",
+            "your-db-password",
         )
+        return any(token in normalized for token in placeholder_tokens)
+
+    def _derive_postgres_database_url(self) -> str:
+        host = (self.POSTGRES_HOST or "").strip()
+        username = (self.POSTGRES_USER or "").strip()
+        database = (self.POSTGRES_DB or "").strip()
+        if not host or not username or not database:
+            return ""
+
+        encoded_user = quote_plus(username)
+        encoded_password = quote_plus(self.POSTGRES_PASSWORD or "")
+        auth = f"{encoded_user}:{encoded_password}" if self.POSTGRES_PASSWORD else encoded_user
+
+        base = (
+            f"postgresql+psycopg://{auth}"
+            f"@{host}:{int(self.POSTGRES_PORT or 5432)}/{database}"
+        )
+        sslmode = (self.POSTGRES_SSLMODE or "").strip()
+        if sslmode:
+            return f"{base}?sslmode={sslmode}"
+        return base
 
     @property
     def app_database_url(self) -> str:
-        if self.APP_DATABASE_URL:
-            return self.APP_DATABASE_URL
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
-        return self.postgres_url
+        configured_url = (self.APP_DATABASE_URL or "").strip()
+        if configured_url:
+            if self._is_placeholder_database_url(configured_url):
+                raise ValueError(
+                    "APP_DATABASE_URL still contains placeholder values. "
+                    "Set a real APP_DATABASE_URL or leave it empty to use POSTGRES_*."
+                )
+            return configured_url
 
-    @property
-    def postgres_url(self) -> str:
-        host = self.POSTGRES_HOST.strip()
-        database = self.POSTGRES_DB.strip()
-        username = self.POSTGRES_USER.strip()
-        if not host or not database or not username:
-            raise ValueError(
-                "POSTGRES_HOST, POSTGRES_DB, and POSTGRES_USER must be set "
-                "when APP_DATABASE_URL/DATABASE_URL are not provided."
-            )
+        derived_url = self._derive_postgres_database_url()
+        if derived_url:
+            return derived_url
 
-        encoded_user = quote_plus(username)
-        encoded_password = quote_plus(self.POSTGRES_PASSWORD)
-        if self.POSTGRES_PASSWORD:
-            auth = f"{encoded_user}:{encoded_password}"
-        else:
-            auth = encoded_user
-
-        return (
-            f"postgresql+{self.POSTGRES_DRIVER}://"
-            f"{auth}@{host}:{self.POSTGRES_PORT}/{database}"
+        raise ValueError(
+            "Database configuration is missing. Set APP_DATABASE_URL or "
+            "POSTGRES_HOST/POSTGRES_PORT/POSTGRES_USER/POSTGRES_PASSWORD/POSTGRES_DB."
         )
 
     @property
     def database_url(self) -> str:
         # Backward-compatible alias used by older code paths.
-        return self.clickhouse_url
+        return self.app_database_url
 
     class Config:
         env_file = str(ENV_FILE)

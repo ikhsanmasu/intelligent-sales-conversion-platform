@@ -1,11 +1,8 @@
+from importlib import import_module
 from typing import Dict, Tuple
 
 from app.core.config import settings
 from app.core.llm.base import BaseLLM
-from app.core.llm.providers.anthropic import AnthropicProvider
-from app.core.llm.providers.google import GoogleProvider
-from app.core.llm.providers.xai import XaiProvider
-from app.core.llm.providers.openai import OpenAIProvider
 
 
 PROVIDER_ALIASES = {
@@ -14,10 +11,10 @@ PROVIDER_ALIASES = {
 }
 
 LLM_REGISTRY = {
-    "openai": OpenAIProvider,
-    "xai": XaiProvider,
-    "google": GoogleProvider,
-    "anthropic": AnthropicProvider,
+    "openai": ("app.core.llm.providers.openai", "OpenAIProvider"),
+    "xai": ("app.core.llm.providers.xai", "XaiProvider"),
+    "google": ("app.core.llm.providers.google", "GoogleProvider"),
+    "anthropic": ("app.core.llm.providers.anthropic", "AnthropicProvider"),
 }
 
 PROVIDER_CONFIG: Dict[str, dict[str, str]] = {
@@ -126,6 +123,19 @@ def list_llm_options() -> dict[str, object]:
 _instances: Dict[Tuple[str, str], BaseLLM] = {}
 
 
+def _load_provider_class(provider: str):
+    module_name, class_name = LLM_REGISTRY[provider]
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(
+            f"Provider '{provider}' dependency is not installed. "
+            f"Install the required package for {module_name}."
+        ) from exc
+
+    return getattr(module, class_name)
+
+
 def _llm_key(group: str, key: str) -> str:
     if group == "llm":
         if key == "provider":
@@ -189,7 +199,7 @@ def create_llm(
     if use_cache and key in _instances:
         return _instances[key]
 
-    llm_class = LLM_REGISTRY[provider]
+    llm_class = _load_provider_class(provider)
 
     instance = llm_class(
         api_key=api_key,
