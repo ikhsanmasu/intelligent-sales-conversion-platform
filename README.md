@@ -177,8 +177,8 @@ docker compose -f docker-compose.server.yml up -d --build
 
 Default domain mapping in `Caddyfile`:
 
-- `dashboard.isanmas.site` -> frontend
-- `api.isanmas.site` -> backend
+- `frontend.isanmas.site` -> frontend
+- `backend.isanmas.site` -> backend
 
 Before running on your server:
 

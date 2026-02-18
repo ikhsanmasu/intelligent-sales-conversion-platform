@@ -50,7 +50,7 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_API_URL: https://api.isanmas.site
+        VITE_API_URL: https://backend.isanmas.site
     expose:
       - "80"
     depends_on:

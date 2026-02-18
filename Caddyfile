@@ -1,9 +1,9 @@
-dashboard.isanmas.site {
+frontend.isanmas.site {
 	encode zstd gzip
 	reverse_proxy frontend:80
 }
 
-api.isanmas.site {
+backend.isanmas.site {
 	encode zstd gzip
 	reverse_proxy backend:8000
 }
