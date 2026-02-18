@@ -1,0 +1,70 @@
+from collections.abc import Generator
+
+from openai import OpenAI
+
+from app.core.llm.base import BaseLLM
+from app.core.llm.schemas import GenerateConfig, LLMResponse
+
+
+class OpenAICompatibleProvider(BaseLLM):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str | None = None,
+        default_headers: dict | None = None,
+    ):
+        if base_url:
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                default_headers=default_headers or None,
+            )
+        else:
+            self._client = OpenAI(api_key=api_key, default_headers=default_headers or None)
+        self._model = model
+
+    def _build_params(self, messages: list[dict], config: GenerateConfig) -> dict:
+        params = {
+            "model": self._model,
+            "messages": messages,
+            "temperature": config.temperature,
+            "top_p": config.top_p,
+        }
+        if config.max_tokens is not None:
+            params["max_tokens"] = config.max_tokens
+        if config.stop is not None:
+            params["stop"] = config.stop
+        return params
+
+    def generate(self, messages: list[dict], config: GenerateConfig | None = None) -> LLMResponse:
+        config = config or GenerateConfig()
+
+        response = self._client.chat.completions.create(
+            **self._build_params(messages, config),
+        )
+        return LLMResponse(
+            text=response.choices[0].message.content,
+            usage={
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            },
+        )
+
+    def generate_stream(self, messages: list[dict], config: GenerateConfig | None = None) -> Generator[str, None, None]:
+        config = config or GenerateConfig()
+
+        stream = self._client.chat.completions.create(
+            **self._build_params(messages, config),
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
+
+class OpenAIProvider(OpenAICompatibleProvider):
+    def __init__(self, api_key: str, model: str, base_url: str | None = None):
+        super().__init__(api_key=api_key, model=model, base_url=base_url)
