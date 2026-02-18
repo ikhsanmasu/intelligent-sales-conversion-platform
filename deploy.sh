@@ -88,6 +88,9 @@ _deploy_run() {
 
   echo "[deploy] current status:"
   docker compose -p "$project_name" -f "$compose_file" ps
+
+  echo "[deploy] following logs (Ctrl+C untuk berhenti)..."
+  docker compose -p "$project_name" -f "$compose_file" logs -f
 }
 
 deploy_keep_volumes() {
