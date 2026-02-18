@@ -2,19 +2,15 @@ import json
 import re
 from collections.abc import Generator
 
-from app.agents.database import create_database_agent
 from app.agents.memory import create_memory_agent
 from app.agents.memory.store import get_memory_summary
 from app.agents.planner import create_planner_agent
-from app.agents.vector import create_vector_agent
 from app.channels.media import build_testimony_markdown_images, looks_like_testimony_reply
 from app.modules.billing.service import record_usage_event
-from app.modules.admin.service import resolve_config
 from app.modules.chatbot.repository import ChatRepository
 from app.modules.chatbot.schemas import ChatRequest, ChatResponse
 
 
-_FALSE_VALUES = {"0", "false", "off", "no", "disabled"}
 _KNOWN_CHANNELS = {"telegram", "whatsapp", "web"}
 
 _READY_TO_BUY_PATTERNS = (
@@ -81,57 +77,6 @@ def _build_history(request: ChatRequest) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in request.history]
 
 
-def _is_agent_enabled(agent_key: str, default: bool = True) -> bool:
-    try:
-        value = resolve_config("agents", agent_key)
-    except Exception:
-        return default
-
-    if value is None or str(value).strip() == "":
-        return default
-    return str(value).strip().lower() not in _FALSE_VALUES
-
-
-def _collect_knowledge_context(
-    question: str, history: list[dict] | None = None,
-) -> dict[str, str]:
-    context: dict[str, str] = {}
-    normalized = _normalize_for_match(question)
-    short_greetings = {
-        "halo",
-        "hai",
-        "hi",
-        "hello",
-        "pagi",
-        "siang",
-        "sore",
-        "malam",
-        "permisi",
-    }
-    if normalized in short_greetings or (
-        len(normalized.split()) <= 2 and normalized in {"halo kak", "hai kak"}
-    ):
-        return context
-
-    if _is_agent_enabled("database", default=True):
-        try:
-            db_result = create_database_agent().execute(question)
-            if not db_result.metadata.get("error"):
-                context["database_context"] = db_result.output[:1400]
-        except Exception:
-            pass
-
-    if _is_agent_enabled("vector", default=True):
-        try:
-            vector_result = create_vector_agent().execute(question, context={"top_k": 3})
-            if not vector_result.metadata.get("error"):
-                context["vector_context"] = vector_result.output[:1600]
-        except Exception:
-            pass
-
-    return context
-
-
 def chat(request: ChatRequest) -> ChatResponse:
     planner = create_planner_agent()
     history = _build_history(request)
@@ -148,7 +93,6 @@ def chat(request: ChatRequest) -> ChatResponse:
         "conversation_id": request.conversation_id,
         "memory_summary": memory_summary,
     }
-    context.update(_collect_knowledge_context(request.message, history=history))
     result = planner.execute(request.message, history=history, context=context)
 
     # Inject testimony images for dashboard/API consumers
@@ -196,7 +140,6 @@ def chat_stream(request: ChatRequest) -> Generator[str, None, None]:
         "conversation_id": request.conversation_id,
         "memory_summary": memory_summary,
     }
-    context.update(_collect_knowledge_context(request.message, history=history))
     full_content = ""
     last_metadata = None
 

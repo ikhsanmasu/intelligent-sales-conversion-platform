@@ -1,833 +1,173 @@
-import json
 import re
 from collections.abc import Generator
 
 from app.agents.base import AgentResult, BaseAgent
-from app.agents.planner.subagents import (
-    ConsultationSubAgent,
-    EmpathySubAgent,
-    ProductKnowledgeSubAgent,
-    ReflectionSubAgent,
-    SubAgentResult,
-    render_notes_for_prompt,
-)
 from app.core.config import settings
 from app.core.llm.base import BaseLLM
 from app.core.llm.schemas import GenerateConfig
 from app.modules.admin.service import resolve_config, resolve_prompt
 
 
-PRODUCT_KNOWLEDGE_FULL = """Produk yang dijual:
-- Nama: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP)
-- Harga: Rp110.900
-- Kemasan: 60 g
-- EXP: 30 Januari 2028
-- BPOM: NA18201202832
-- Halal MUI: 00150086800118
+_PRODUCT_KNOWLEDGE = """Nama: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP)
+Harga: Rp110.900 | Kemasan: 60 g | EXP: 30 Jan 2028
+BPOM: NA18201202832 | Halal MUI: 00150086800118
 
 Deskripsi:
-Sabun pembersih wajah berbentuk krim berbusa dengan scrub lembut untuk membantu
-mengangkat sebum berlebih, kotoran, dan sel kulit mati.
+Sabun muka krim berbusa dengan scrub lembut. Terbukti klinis mengontrol sebum hingga 8 jam,
+menjaga kelembapan kulit, dan tidak menimbulkan iritasi.
 
-Manfaat utama:
-- Membantu menghambat bakteri penyebab jerawat (uji in-vitro)
-- Membantu mencegah jerawat baru
-- Membantu mengurangi minyak berlebih
-- Membantu membersihkan hingga ke pori
-- Membantu mengangkat sel kulit mati
-- Scrub lembut biodegradable
-- Terbukti secara klinis membantu kontrol sebum hingga 8 jam
-- Menjaga kelembapan kulit
-- Tidak menimbulkan iritasi
+Manfaat:
+- Menghambat bakteri penyebab jerawat (uji in-vitro)
+- Mengurangi minyak berlebih & membersihkan hingga ke pori
+- Mengangkat sel kulit mati dengan scrub biodegradable yang lembut
 
-Kandungan utama:
-- BHA
-- Sulphur
-- Biodegradable Sphere Scrub
+Kandungan utama: BHA, Sulphur, Biodegradable Sphere Scrub
 
 Cara pakai:
-- Basahi wajah
-- Aplikasikan lalu pijat lembut
-- Bilas hingga bersih
-- Gunakan 2-3 kali sehari
+Basahi wajah → aplikasikan & pijat lembut → bilas hingga bersih → gunakan 2–3x sehari
 
-Ketentuan pengiriman dan komplain:
-- Wajib isi alamat lengkap
-- Komplain wajib dengan video unboxing tanpa putus
-- Tanpa video unboxing, komplain tidak diproses
+Ketentuan komplain:
+Isi alamat lengkap saat order. Komplain wajib disertai video unboxing tanpa putus —
+tanpa video, komplain tidak dapat diproses.
 
 Testimoni:
-1) @amandabilla98 (Amanda):
-"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming dan ngebantu redain jerawat yang lagi meradang."
-2) @silmisyauz (Silmi):
-"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much."
+• @amandabilla98 (Amanda):
+  "Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol jerawatnya,
+   cocok banget akhirnya nyoba si facial washnya. Cocok, calming dan ngebantu redain
+   jerawat yang lagi meradang."
+• @silmisyauz (Silmi):
+  "Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget sama kulitku yang
+   acne-prone. Bikin kulit jarang jerawat dan sehat. Teksturnya kayak ada scrub kecil tapi
+   ga sakit sama sekali, busanya ada tapi gak too much."
 """
 
-PRODUCT_KNOWLEDGE_BRIEF = (
-    "Produk tunggal yang dijual: ERHA Acneact Acne Cleanser Scrub Beta Plus "
-    "(ACSBP), untuk kulit berjerawat dan berminyak, harga Rp110.900 per 60 g."
-)
-
-BASE_SYSTEM_PROMPT = """Kamu adalah Ira Acneact Care Assistant.
+_SYSTEM_PROMPT = """\
+Kamu adalah Ira, Acneact Care Assistant yang ramah dan empatik.
 Kamu hanya menjual satu produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP).
 
-Aturan wajib:
-1) Bahasa ramah, santai, natural seperti manusia.
-2) Soft-selling empatik: validasi user dulu, lalu bantu dengan solusi.
-3) Struktur persuasi: Story -> Benefit -> Ajakan lembut.
-4) Jangan memaksa beli.
-5) Jangan mengarang data.
-6) Maksimal 1 pertanyaan follow-up per balasan.
-7) Fokus user merasa dipahami, bukan merasa dijuali.
-"""
+## Tugas Utama
+Setiap giliran, baca seluruh riwayat percakapan dari awal, tentukan sendiri tahap percakapan
+saat ini, lalu berikan respons yang paling tepat untuk tahap tersebut.
 
-_STAGE_ORDER = [
-    "greeting",
-    "opening",
-    "consultation",
-    "testimony",
-    "promo",
-    "closing",
-    "farewell",
-]
-_VALID_STAGES = set(_STAGE_ORDER)
-_KNOWLEDGE_BRIEF_STAGES = {"greeting", "farewell"}
-_MAX_HISTORY_MESSAGES = 15
-_MAX_PLAN_HISTORY_MESSAGES = 12
+## Alur Percakapan (7 Tahap)
+Ikuti alur ini secara natural — jangan lompat terlalu jauh, tapi jangan terlalu lambat:
 
-_DEFAULT_STAGE_OBJECTIVES = {
-    "greeting": "Bangun koneksi awal yang hangat.",
-    "opening": "Gali masalah utama user dengan natural.",
-    "consultation": "Hubungkan masalah user dengan solusi produk secara empatik.",
-    "testimony": "Bangun trust dengan bukti sosial yang relevan.",
-    "promo": "Jelaskan value produk dengan ajakan lembut.",
-    "closing": "Dorong transaksi dengan langkah jelas tanpa tekanan.",
-    "farewell": "Akhiri percakapan secara hangat dan suportif.",
-}
+1. **Greeting** – Sapa hangat & personal. Bangun koneksi awal yang menyenangkan.
+2. **Opening** – Kenalkan topik kulit/jerawat, bangkitkan minat, mulai gali masalah user.
+3. **Consultation** – Gali masalah lebih dalam, validasi, lalu hubungkan ke solusi produk
+   dengan pola: Story → Manfaat → Ajakan lembut.
+4. **Testimony** – Perkuat kepercayaan dengan bukti sosial (testimoni pengguna nyata)
+   secara natural — bukan sekadar copy-paste.
+5. **Promo** – Tekankan value produk, manfaat yang didapat, bukan hanya harga.
+6. **Closing** – Dorong user untuk order dengan langkah jelas, ramah, tidak memaksa.
+7. **Farewell** – Tutup percakapan dengan nada hangat dan positif.
 
-_STAGE_COMPACT_GUIDANCE = {
-    "greeting": "Sapa hangat dan personal. Bila perlu tanya satu hal ringan.",
-    "opening": "Validasi masalah user, lalu gali inti kebutuhannya.",
-    "consultation": "Empati dulu, berikan solusi relevan, lalu ajakan halus.",
-    "testimony": "Pakai social proof relevan tanpa terkesan memaksa.",
-    "promo": "Tekankan manfaat dan value, bukan sekadar harga.",
-    "closing": "Berikan langkah order dengan bahasa ramah.",
-    "farewell": "Tutup percakapan dengan nada positif.",
-}
+Cara menentukan tahap saat ini:
+- Baca semua pesan dari awal percakapan.
+- Perhatikan sudah sejauh mana percakapan berjalan dan apa yang sudah dibahas.
+- Pilih tahap yang paling masuk akal untuk dilanjutkan sekarang.
+- Jika user bertanya hal spesifik di luar alur, jawab dulu lalu kembali ke alur secara natural.
 
-_PLANNER_SYSTEM_PROMPT = """Kamu adalah Planner Agent utama untuk sales skincare.
-Tugasmu: menyusun rencana MICRO untuk SATU bubble balasan berikutnya.
-Fokus: percakapan mengalir pelan-pelan, tidak terlihat seperti bot, tidak lompat jauh.
+## Karakter & Gaya Bahasa
+- Bahasa Indonesia santai, kekinian, hangat — seperti ngobrol dengan teman yang peduli.
+- Empati dulu, solusi kemudian — user harus merasa dipahami sebelum ditawarkan produk.
+- Soft-selling: fokus pada manfaat dan solusi, bukan "beli sekarang".
+- Satu pertanyaan follow-up per balasan — jangan bertanya beruntun.
+- Respons pendek & padat — hindari paragraf panjang yang terkesan template atau robotik.
+- Jangan mengarang data produk yang tidak ada di product knowledge.
 
-Tujuan global:
-- Natural, empatik, tidak robotik.
-- Soft-selling: fokus solusi, bukan paksaan.
-- Struktur: Story -> Benefit -> Ajakan lembut.
-- Maksimal satu pertanyaan follow-up.
-- Gunakan gaya step-by-step: satu langkah kecil per turn.
-
-Balas JSON valid saja (tanpa markdown):
-{
-  "micro_intent": "greeting_short|explore_problem|answer_product_fact|build_trust|offer_value|assist_order|farewell",
-  "stage": "greeting|opening|consultation|testimony|promo|closing|farewell",
-  "objective": "tujuan mikro untuk bubble ini",
-  "tone": "gaya bahasa singkat & natural",
-  "soft_closing_strategy": "cara ajakan lembut",
-  "target_length": "very_short|short|normal",
-  "max_sentences": 1,
-  "persuasion": {
-    "story": "framing masalah user",
-    "benefit": "manfaat yang mau ditekankan",
-    "gentle_cta": "ajakan halus"
-  },
-  "ask_follow_up": true,
-  "follow_up_question": "pertanyaan follow-up tunggal jika perlu",
-  "must_include": ["poin wajib"],
-  "must_avoid": ["poin yang harus dihindari"],
-  "support_agents": ["empathy|product_knowledge|consultation"]
-}
-
-Aturan penting:
-- Jika user cuma sapa singkat (contoh: "halo", "hai"), pilih micro_intent=greeting_short.
-- Untuk greeting_short: target_length=very_short, max_sentences 1-2, jangan jelasin produk panjang.
-- Panggil support_agents seperlunya, jangan semua sekaligus.
+## Product Knowledge
+{product_knowledge}
 """
 
 
 class PlannerAgent(BaseAgent):
+    """Sales agent — full LLM driven, no hardcoded stage logic."""
+
     def __init__(self, llm: BaseLLM):
         super().__init__(llm)
-        self.empathy_agent = EmpathySubAgent(llm=llm)
-        self.product_agent = ProductKnowledgeSubAgent(llm=llm)
-        self.consultation_agent = ConsultationSubAgent(llm=llm)
-        self.reflection_agent = ReflectionSubAgent(llm=llm)
+
+    # ── Helpers ────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
         return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
 
     @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        if not text:
-            return 0
-        return max(1, round(len(text) / 4))
-
-    def _normalize_usage(self, raw_usage: dict | None, prompt_text: str, output_text: str) -> dict:
-        raw_usage = raw_usage or {}
-        prompt_tokens = (
-            raw_usage.get("prompt_tokens")
-            or raw_usage.get("input_tokens")
-            or self._estimate_tokens(prompt_text)
-        )
-        completion_tokens = (
-            raw_usage.get("completion_tokens")
-            or raw_usage.get("output_tokens")
-            or self._estimate_tokens(output_text)
-        )
-
-        try:
-            prompt_tokens = int(prompt_tokens)
-        except Exception:
-            prompt_tokens = self._estimate_tokens(prompt_text)
-
-        try:
-            completion_tokens = int(completion_tokens)
-        except Exception:
-            completion_tokens = self._estimate_tokens(output_text)
-
-        total_tokens = raw_usage.get("total_tokens")
-        if total_tokens is None:
-            total_tokens = prompt_tokens + completion_tokens
-
+    def _normalize_usage(raw: dict | None, prompt: str = "", output: str = "") -> dict:
+        raw = raw or {}
+        inp = int(raw.get("prompt_tokens") or raw.get("input_tokens") or max(1, len(prompt) // 4))
+        out = int(raw.get("completion_tokens") or raw.get("output_tokens") or max(1, len(output) // 4))
         return {
-            "input_tokens": int(prompt_tokens),
-            "output_tokens": int(completion_tokens),
-            "prompt_tokens": int(prompt_tokens),
-            "completion_tokens": int(completion_tokens),
-            "total_tokens": int(total_tokens),
+            "input_tokens": inp,
+            "output_tokens": out,
+            "prompt_tokens": inp,
+            "completion_tokens": out,
+            "total_tokens": inp + out,
         }
-
-    @staticmethod
-    def _merge_usage(*usages: dict) -> dict:
-        merged = {
-            "input_tokens": 0,
-            "output_tokens": 0,
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
-        for usage in usages:
-            if not isinstance(usage, dict):
-                continue
-            for key in merged:
-                try:
-                    merged[key] += int(usage.get(key, 0) or 0)
-                except Exception:
-                    pass
-        merged["total_tokens"] = merged["prompt_tokens"] + merged["completion_tokens"]
-        merged["input_tokens"] = merged["prompt_tokens"]
-        merged["output_tokens"] = merged["completion_tokens"]
-        return merged
 
     @staticmethod
     def _resolve_llm_identity() -> tuple[str, str]:
-        provider = settings.CHATBOT_DEFAULT_LLM
-        model = settings.CHATBOT_DEFAULT_MODEL
+        provider, model = settings.CHATBOT_DEFAULT_LLM, settings.CHATBOT_DEFAULT_MODEL
         try:
-            planner_provider = resolve_config("llm_planner", "provider")
-            planner_model = resolve_config("llm_planner", "model")
-            fallback_provider = resolve_config("llm", "default_provider")
-            fallback_model = resolve_config("llm", "default_model")
-            provider = planner_provider or fallback_provider or provider
-            model = planner_model or fallback_model or model
+            provider = (
+                resolve_config("llm_planner", "provider")
+                or resolve_config("llm", "default_provider")
+                or provider
+            )
+            model = (
+                resolve_config("llm_planner", "model")
+                or resolve_config("llm", "default_model")
+                or model
+            )
         except Exception:
             pass
         return str(provider), str(model)
 
-    @staticmethod
-    def _trim_history(history: list[dict] | None, max_messages: int = _MAX_HISTORY_MESSAGES) -> list[dict]:
-        if not history:
-            return []
-        normalized = [
-            {"role": item.get("role", ""), "content": str(item.get("content", ""))}
-            for item in history
-            if item.get("role") in {"user", "assistant"} and str(item.get("content", "")).strip()
-        ]
-        if len(normalized) <= max_messages:
-            return normalized
-        return normalized[-max_messages:]
+    # ── Prompt & Message Building ──────────────────────────────────────────────
 
-    def _format_history_for_planner(self, history: list[dict] | None) -> str:
-        trimmed = self._trim_history(history, max_messages=_MAX_PLAN_HISTORY_MESSAGES)
-        if not trimmed:
-            return "(no history)"
-        rows = []
-        for item in trimmed:
-            role = "USER" if item.get("role") == "user" else "ASSISTANT"
-            content = " ".join(str(item.get("content", "")).split())
-            rows.append(f"{role}: {content[:320]}")
-        return "\n".join(rows)
-
-    @staticmethod
-    def _extract_json_object(text: str) -> dict:
-        content = (text or "").strip()
-        if not content:
-            return {}
-        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
-        if fenced:
-            content = fenced.group(1).strip()
-        else:
-            start = content.find("{")
-            end = content.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                content = content[start : end + 1]
-        try:
-            return json.loads(content)
-        except Exception:
-            repaired = re.sub(r",\s*([}\]])", r"\1", content)
-            try:
-                return json.loads(repaired)
-            except Exception:
-                return {}
-
-    @staticmethod
-    def _normalize_list(value: object, fallback: list[str] | None = None, max_items: int = 8) -> list[str]:
-        if isinstance(value, list):
-            out = [str(item).strip() for item in value if str(item).strip()]
-            return out[:max_items] if out else (fallback or [])
-        if isinstance(value, str) and value.strip():
-            return [value.strip()]
-        return fallback or []
-
-    def _default_plan(self) -> dict:
-        return {
-            "micro_intent": "explore_problem",
-            "stage": "consultation",
-            "stage_reason": "fallback micro plan",
-            "objective": _DEFAULT_STAGE_OBJECTIVES["consultation"],
-            "tone": "ramah, santai, empatik",
-            "soft_closing_strategy": "beri solusi dulu lalu ajak lanjut dengan halus",
-            "target_length": "short",
-            "max_sentences": 2,
-            "persuasion": {
-                "story": "Validasi cerita user tentang masalah kulit.",
-                "benefit": "Pilih manfaat produk yang paling relevan.",
-                "gentle_cta": "Ajak lanjut tanpa tekanan.",
-            },
-            "ask_follow_up": True,
-            "follow_up_question": "",
-            "must_include": [
-                "nada empatik",
-                "story -> benefit -> ajakan lembut",
-            ],
-            "must_avoid": [
-                "hard-selling",
-                "mengarang data",
-                "lebih dari satu pertanyaan",
-            ],
-            "support_agents": ["empathy", "consultation"],
-        }
-
-    def _normalize_plan(self, raw_plan: dict) -> dict:
-        plan = raw_plan if isinstance(raw_plan, dict) else {}
-        default = self._default_plan()
-        persuasion = plan.get("persuasion")
-        if not isinstance(persuasion, dict):
-            persuasion = {}
-
-        stage = str(plan.get("stage") or default["stage"]).strip().lower()
-        if stage not in _VALID_STAGES:
-            stage = default["stage"]
-
-        micro_intent = str(plan.get("micro_intent") or "").strip().lower()
-        if not micro_intent:
-            micro_intent = self._infer_micro_intent_from_stage(stage)
-        stage = self._infer_stage_from_micro_intent(micro_intent, fallback_stage=stage)
-
-        ask_follow_up = bool(plan.get("ask_follow_up", default["ask_follow_up"]))
-        follow_up_question = str(plan.get("follow_up_question") or "").strip()
-        if not ask_follow_up:
-            follow_up_question = ""
-
-        target_length = str(plan.get("target_length") or default["target_length"]).strip().lower()
-        if target_length not in {"very_short", "short", "normal"}:
-            target_length = default["target_length"]
-
-        max_sentences = plan.get("max_sentences", default["max_sentences"])
-        try:
-            max_sentences = int(max_sentences)
-        except Exception:
-            max_sentences = int(default["max_sentences"])
-        max_sentences = max(1, min(max_sentences, 4))
-
-        return {
-            "micro_intent": micro_intent,
-            "stage": stage,
-            "stage_reason": str(plan.get("stage_reason") or default["stage_reason"]).strip(),
-            "objective": str(
-                plan.get("objective") or _DEFAULT_STAGE_OBJECTIVES.get(stage) or default["objective"]
-            ).strip(),
-            "tone": str(plan.get("tone") or default["tone"]).strip(),
-            "soft_closing_strategy": str(
-                plan.get("soft_closing_strategy") or default["soft_closing_strategy"]
-            ).strip(),
-            "target_length": target_length,
-            "max_sentences": max_sentences,
-            "persuasion": {
-                "story": str(persuasion.get("story") or default["persuasion"]["story"]).strip(),
-                "benefit": str(persuasion.get("benefit") or default["persuasion"]["benefit"]).strip(),
-                "gentle_cta": str(
-                    persuasion.get("gentle_cta") or default["persuasion"]["gentle_cta"]
-                ).strip(),
-            },
-            "ask_follow_up": ask_follow_up,
-            "follow_up_question": follow_up_question,
-            "must_include": self._normalize_list(plan.get("must_include"), fallback=default["must_include"]),
-            "must_avoid": self._normalize_list(plan.get("must_avoid"), fallback=default["must_avoid"]),
-            "support_agents": self._normalize_list(
-                plan.get("support_agents"), fallback=default["support_agents"], max_items=3
-            ),
-        }
-
-    @staticmethod
-    def _infer_micro_intent_from_stage(stage: str) -> str:
-        mapping = {
-            "greeting": "greeting_short",
-            "opening": "explore_problem",
-            "consultation": "explore_problem",
-            "testimony": "build_trust",
-            "promo": "offer_value",
-            "closing": "assist_order",
-            "farewell": "farewell",
-        }
-        return mapping.get(stage, "explore_problem")
-
-    @staticmethod
-    def _infer_stage_from_micro_intent(micro_intent: str, fallback_stage: str = "consultation") -> str:
-        mapping = {
-            "greeting_short": "greeting",
-            "explore_problem": "consultation",
-            "answer_product_fact": "consultation",
-            "build_trust": "testimony",
-            "offer_value": "promo",
-            "assist_order": "closing",
-            "farewell": "farewell",
-        }
-        stage = mapping.get(micro_intent, fallback_stage)
-        if stage not in _VALID_STAGES:
-            return fallback_stage if fallback_stage in _VALID_STAGES else "consultation"
-        return stage
-
-    @staticmethod
-    def _looks_like_short_greeting(input_text: str) -> bool:
-        normalized = re.sub(r"[^a-zA-Z0-9\s]", " ", str(input_text or "").lower())
-        tokens = [token for token in normalized.split() if token.strip()]
-        if not tokens:
-            return False
-        greeting_tokens = {
-            "halo",
-            "hai",
-            "hi",
-            "hello",
-            "pagi",
-            "siang",
-            "sore",
-            "malam",
-            "hey",
-            "helo",
-            "hy",
-            "yo",
-            "assalamualaikum",
-            "permisi",
-        }
-        if len(tokens) <= 3 and any(token in greeting_tokens for token in tokens):
-            return True
-        if len(tokens) == 1 and tokens[0] in greeting_tokens:
-            return True
-        return False
-
-    def _apply_micro_turn_overrides(self, plan: dict, input_text: str, history: list[dict] | None) -> dict:
-        updated = dict(plan)
-        history = history or []
-        is_first_turn = len(self._trim_history(history, max_messages=2)) == 0
-        if self._looks_like_short_greeting(input_text):
-            updated["micro_intent"] = "greeting_short"
-            updated["stage"] = "greeting" if is_first_turn else "opening"
-            updated["objective"] = "Bangun koneksi ringan lalu lanjutkan obrolan pelan-pelan."
-            updated["target_length"] = "very_short"
-            updated["max_sentences"] = 2
-            updated["ask_follow_up"] = True
-            if not str(updated.get("follow_up_question") or "").strip():
-                updated["follow_up_question"] = "Lagi pengen bahas masalah kulit apa dulu nih?"
-
-            must_avoid = list(updated.get("must_avoid", []))
-            for item in [
-                "penjelasan produk panjang",
-                "pitch sales panjang",
-                "daftar benefit beruntun",
-            ]:
-                if item not in must_avoid:
-                    must_avoid.append(item)
-            updated["must_avoid"] = must_avoid
-            updated["support_agents"] = ["empathy"]
-        return updated
-
-    @staticmethod
-    def _normalize_support_agents(plan: dict) -> list[str]:
-        raw = plan.get("support_agents") or []
-        allowed = {"empathy", "product_knowledge", "consultation"}
-        out: list[str] = []
-        for item in raw:
-            key = str(item).strip().lower()
-            if key in allowed and key not in out:
-                out.append(key)
-        return out[:3]
-
-    def _select_support_agents(self, plan: dict) -> list[tuple[str, object]]:
-        selected = self._normalize_support_agents(plan)
-        micro_intent = str(plan.get("micro_intent") or "")
-
-        if not selected:
-            selected = ["empathy"]
-            if micro_intent in {"answer_product_fact", "offer_value", "build_trust", "assist_order"}:
-                selected.append("product_knowledge")
-            if micro_intent in {"explore_problem", "offer_value", "assist_order"}:
-                selected.append("consultation")
-
-        if micro_intent == "greeting_short":
-            selected = ["empathy"]
-
-        by_key = {
-            "empathy": self.empathy_agent,
-            "product_knowledge": self.product_agent,
-            "consultation": self.consultation_agent,
-        }
-        return [(key, by_key[key]) for key in selected if key in by_key]
-
-    @staticmethod
-    def _planning_config() -> GenerateConfig:
-        return GenerateConfig(temperature=0.12, max_tokens=380)
-
-    @staticmethod
-    def _draft_config(stage: str) -> GenerateConfig:
-        temp = 0.45
-        max_tokens = 240
-        if stage in {"promo", "closing"}:
-            temp = 0.35
-            max_tokens = 220
-        if stage in {"greeting", "opening"}:
-            temp = 0.35
-            max_tokens = 120
-        return GenerateConfig(temperature=temp, max_tokens=max_tokens)
-
-    def _plan_orchestration_with_llm(
-        self,
-        input_text: str,
-        history: list[dict] | None = None,
-        context: dict | None = None,
-    ) -> tuple[dict, dict]:
-        history_text = self._format_history_for_planner(history)
-        context = context or {}
-        memory_summary = str(context.get("memory_summary") or "")[:700]
-        database_context = str(context.get("database_context") or "")[:900]
-        vector_context = str(context.get("vector_context") or "")[:900]
-
-        planner_user_prompt = (
-            f"Pesan user terbaru:\n{input_text}\n\n"
-            f"Riwayat ringkas:\n{history_text}\n\n"
-            f"Memory summary:\n{memory_summary or '(none)'}\n\n"
-            f"Database context:\n{database_context or '(none)'}\n\n"
-            f"Vector context:\n{vector_context or '(none)'}\n\n"
-            "Buat rencana untuk satu bubble jawaban berikutnya."
-        )
-        messages = [
-            {"role": "system", "content": _PLANNER_SYSTEM_PROMPT},
-            {"role": "user", "content": planner_user_prompt},
-        ]
-        prompt_text = "\n".join(str(item.get("content", "")) for item in messages)
+    def _build_system_prompt(self, memory_summary: str | None) -> str:
+        system = _SYSTEM_PROMPT.format(product_knowledge=_PRODUCT_KNOWLEDGE).strip()
 
         try:
-            response = self.llm.generate(messages=messages, config=self._planning_config())
-            raw_text = self._strip_think_tags(response.text)
-            plan = self._normalize_plan(self._extract_json_object(raw_text))
-            plan = self._apply_micro_turn_overrides(
-                plan=plan,
-                input_text=input_text,
-                history=history,
-            )
-            usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=raw_text)
-            return plan, usage
-        except Exception:
-            fallback = self._default_plan()
-            fallback = self._apply_micro_turn_overrides(
-                plan=fallback,
-                input_text=input_text,
-                history=history,
-            )
-            usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=json.dumps(fallback))
-            return fallback, usage
-
-    def _run_subagents(
-        self,
-        input_text: str,
-        history: list[dict] | None,
-        plan: dict,
-        context: dict | None = None,
-    ) -> tuple[list[SubAgentResult], dict]:
-        notes: list[SubAgentResult] = []
-        usages: list[dict] = []
-        history_text = self._format_history_for_planner(history)
-        selected_subagents = self._select_support_agents(plan)
-
-        for _agent_key, subagent in selected_subagents:
-            note = subagent.run(
-                input_text=input_text,
-                history_text=history_text,
-                plan=plan,
-                previous_notes=notes,
-                context=context,
-            )
-            notes.append(note)
-            usages.append(note.usage)
-
-        return notes, self._merge_usage(*usages)
-
-    def _build_stage_block(self, plan: dict, notes: list[SubAgentResult]) -> str:
-        stage = str(plan.get("stage") or "consultation")
-        micro_intent = str(plan.get("micro_intent") or "explore_problem")
-        target_length = str(plan.get("target_length") or "short")
-        max_sentences = int(plan.get("max_sentences") or 2)
-        support_agents = ", ".join(self._normalize_support_agents(plan)) or "none"
-        persuasion = plan.get("persuasion", {})
-        lines = [
-            f"MICRO_INTENT={micro_intent}",
-            f"TAHAP_AKTIF={stage}",
-            f"PANDUAN_TAHAP={_STAGE_COMPACT_GUIDANCE.get(stage, _STAGE_COMPACT_GUIDANCE['consultation'])}",
-            f"TUJUAN_BUBBLE={plan.get('objective', '')}",
-            f"GAYA_DETAIL={plan.get('tone', '')}",
-            f"PANJANG_TARGET={target_length}",
-            f"MAKS_KALIMAT={max_sentences}",
-            f"SUPPORT_AGENT_DIPAKAI={support_agents}",
-            f"SOFT_CLOSING={plan.get('soft_closing_strategy', '')}",
-            f"STORY_FOCUS={persuasion.get('story', '')}",
-            f"BENEFIT_FOCUS={persuasion.get('benefit', '')}",
-            f"GENTLE_CTA={persuasion.get('gentle_cta', '')}",
-            (
-                "FOLLOW_UP_POLICY="
-                f"ask={str(bool(plan.get('ask_follow_up', False))).lower()}, "
-                f"question={str(plan.get('follow_up_question', '')).strip()}"
-            ),
-            "FORMAT=natural, ngobrol pelan-pelan, jangan terdengar template bot.",
-        ]
-        if plan.get("must_include"):
-            lines.append("MUST_INCLUDE:")
-            lines.extend(f"- {item}" for item in plan.get("must_include", []))
-        if plan.get("must_avoid"):
-            lines.append("MUST_AVOID:")
-            lines.extend(f"- {item}" for item in plan.get("must_avoid", []))
-
-        notes_text = render_notes_for_prompt(notes)
-        if notes_text:
-            lines.append("CATATAN_SUBAGENT:")
-            lines.append(notes_text)
-        return "\n".join(lines)
-
-    def _build_messages(
-        self,
-        input_text: str,
-        history: list[dict] | None,
-        plan: dict,
-        notes: list[SubAgentResult],
-        context: dict | None = None,
-    ) -> list[dict[str, str]]:
-        context = context or {}
-        stage = str(plan.get("stage") or "consultation")
-        micro_intent = str(plan.get("micro_intent") or "explore_problem")
-        memory_summary = context.get("memory_summary")
-        database_context = context.get("database_context")
-        vector_context = context.get("vector_context")
-
-        sales_prompt_template = resolve_prompt("sales_system") or ""
-        sales_prompt = ""
-        if sales_prompt_template:
-            try:
-                sales_prompt = sales_prompt_template.format(
-                    stage=stage,
-                    stage_instruction=_STAGE_COMPACT_GUIDANCE.get(stage, ""),
-                )
-                sales_prompt = " ".join(str(sales_prompt).split())[:700]
-            except Exception:
-                sales_prompt = ""
-
-        stage_block = self._build_stage_block(plan, notes)
-        if micro_intent == "greeting_short":
-            product_block = ""
-        else:
-            product_block = PRODUCT_KNOWLEDGE_BRIEF if stage in _KNOWLEDGE_BRIEF_STAGES else PRODUCT_KNOWLEDGE_FULL
-
-        system_parts = [BASE_SYSTEM_PROMPT]
-        if sales_prompt:
-            system_parts.append(sales_prompt)
-        system_parts.append(stage_block)
-        if product_block:
-            system_parts.append(product_block)
-        system_prompt = "\n\n".join(system_parts)
-
-        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
-
-        if memory_summary:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Ringkasan user sebelumnya:\n{str(memory_summary)[:700]}",
-                }
-            )
-        if database_context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Konteks database relevan:\n{str(database_context)[:900]}",
-                }
-            )
-        if vector_context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"Konteks retrieval relevan:\n{str(vector_context)[:900]}",
-                }
-            )
-
-        messages.extend(self._trim_history(history))
-        messages.append({"role": "user", "content": input_text})
-        return messages
-
-    def _generate_draft(
-        self,
-        input_text: str,
-        history: list[dict] | None,
-        plan: dict,
-        notes: list[SubAgentResult],
-        context: dict | None = None,
-    ) -> tuple[str, dict]:
-        stage = str(plan.get("stage") or "consultation")
-        messages = self._build_messages(
-            input_text=input_text,
-            history=history,
-            plan=plan,
-            notes=notes,
-            context=context,
-        )
-        prompt_text = "\n".join(str(item.get("content", "")) for item in messages)
-
-        try:
-            response = self.llm.generate(
-                messages=messages,
-                config=self._draft_config(stage),
-            )
-            output_text = self._strip_think_tags(response.text)
-            output_text = self._enforce_output_constraints(
-                text=output_text,
-                plan=plan,
-                input_text=input_text,
-            )
-            usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=output_text)
-            if output_text:
-                return output_text, usage
+            sales_prompt = resolve_prompt("sales_system") or ""
+            if sales_prompt:
+                system += f"\n\n{str(sales_prompt).strip()[:600]}"
         except Exception:
             pass
 
-        fallback = "Makasih udah cerita. Biar aku bantu paling pas, boleh aku tahu kondisi kulitmu sekarang lagi cenderung berminyak banget atau ada jerawat meradang?"
-        usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=fallback)
-        return fallback, usage
+        if memory_summary:
+            system += f"\n\n## Konteks Sesi Sebelumnya\n{str(memory_summary)[:700]}"
 
-    def _enforce_output_constraints(self, text: str, plan: dict, input_text: str) -> str:
-        output = " ".join(str(text or "").split()).strip()
-        if not output:
-            return output
+        return system
 
-        target_length = str(plan.get("target_length") or "short").strip().lower()
-        max_sentences = plan.get("max_sentences", 2)
-        try:
-            max_sentences = int(max_sentences)
-        except Exception:
-            max_sentences = 2
-        max_sentences = max(1, min(max_sentences, 4))
+    @staticmethod
+    def _build_messages(
+        input_text: str,
+        history: list[dict] | None,
+        system_prompt: str,
+    ) -> list[dict]:
+        """Pass full history so the LLM can track stage progression itself."""
+        normalized = [
+            {"role": m["role"], "content": str(m.get("content", ""))}
+            for m in (history or [])
+            if m.get("role") in {"user", "assistant"} and str(m.get("content", "")).strip()
+        ]
+        return [
+            {"role": "system", "content": system_prompt},
+            *normalized,
+            {"role": "user", "content": input_text},
+        ]
 
-        if self._looks_like_short_greeting(input_text):
-            target_length = "very_short"
-            max_sentences = min(max_sentences, 2)
-
-        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", output) if item.strip()]
-        if sentences:
-            output = " ".join(sentences[:max_sentences]).strip()
-
-        max_chars_map = {
-            "very_short": 130,
-            "short": 220,
-            "normal": 420,
-        }
-        max_chars = max_chars_map.get(target_length, 220)
-        if len(output) > max_chars:
-            clipped = output[:max_chars].rsplit(" ", 1)[0].strip()
-            if clipped:
-                output = f"{clipped}..."
-            else:
-                output = output[:max_chars].strip()
-        return output
-
-    def _should_run_reflection(self, plan: dict, input_text: str) -> bool:
-        micro_intent = str(plan.get("micro_intent") or "").strip().lower()
-        target_length = str(plan.get("target_length") or "").strip().lower()
-        if micro_intent == "greeting_short":
-            return False
-        if target_length == "very_short" and self._looks_like_short_greeting(input_text):
-            return False
-        return True
+    @staticmethod
+    def _llm_config() -> GenerateConfig:
+        return GenerateConfig(temperature=0.4, max_tokens=300)
 
     @staticmethod
     def _chunk_text(text: str, chunk_size: int = 70) -> list[str]:
-        clean = str(text or "")
-        if not clean:
-            return []
-        return [clean[idx : idx + chunk_size] for idx in range(0, len(clean), chunk_size)]
+        return [text[i: i + chunk_size] for i in range(0, len(text), chunk_size)] if text else []
 
-    def _build_metadata(
-        self,
-        plan: dict,
-        notes: list[SubAgentResult],
-        reflection,
-        usage: dict,
-    ) -> dict:
-        provider, model = self._resolve_llm_identity()
-        return {
-            "agent": "sales",
-            "stage": plan.get("stage", "consultation"),
-            "micro_intent": plan.get("micro_intent", "explore_problem"),
-            "orchestration": {
-                "objective": plan.get("objective", ""),
-                "tone": plan.get("tone", ""),
-                "soft_closing_strategy": plan.get("soft_closing_strategy", ""),
-                "stage_reason": plan.get("stage_reason", ""),
-                "target_length": plan.get("target_length", "short"),
-                "max_sentences": plan.get("max_sentences", 2),
-            },
-            "support_agents": self._normalize_support_agents(plan),
-            "subagents": [
-                {
-                    "agent": note.agent,
-                    "summary": note.summary,
-                    "must_include": note.must_include,
-                    "must_avoid": note.must_avoid,
-                }
-                for note in notes
-            ],
-            "reflection": {
-                "approved": bool(getattr(reflection, "approved", True)),
-                "critique": list(getattr(reflection, "critique", []) or []),
-            },
-            "model": {"provider": provider, "name": model},
-            "usage": usage,
-        }
+    # ── Execution ──────────────────────────────────────────────────────────────
 
     def execute(
         self,
@@ -835,55 +175,28 @@ class PlannerAgent(BaseAgent):
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> AgentResult:
-        plan, planning_usage = self._plan_orchestration_with_llm(
-            input_text=input_text,
-            history=history,
-            context=context,
-        )
-        notes, subagent_usage = self._run_subagents(
-            input_text=input_text,
-            history=history,
-            plan=plan,
-            context=context,
-        )
-        draft_output, draft_usage = self._generate_draft(
-            input_text=input_text,
-            history=history,
-            plan=plan,
-            notes=notes,
-            context=context,
-        )
-        if self._should_run_reflection(plan=plan, input_text=input_text):
-            history_text = self._format_history_for_planner(history)
-            reflection = self.reflection_agent.review(
-                input_text=input_text,
-                history_text=history_text,
-                plan=plan,
-                notes=notes,
-                draft_response=draft_output,
-            )
-        else:
-            reflection = type(
-                "ReflectionSkip",
-                (),
-                {
-                    "approved": True,
-                    "critique": [],
-                    "revised_response": draft_output,
-                    "usage": self._normalize_usage({}, prompt_text="", output_text=""),
-                },
-            )()
+        context = context or {}
+        system = self._build_system_prompt(context.get("memory_summary"))
+        messages = self._build_messages(input_text, history, system)
+        prompt_text = "\n".join(str(m.get("content", "")) for m in messages)
 
-        final_output = (reflection.revised_response or draft_output).strip() or draft_output
-        final_output = self._enforce_output_constraints(
-            text=final_output,
-            plan=plan,
-            input_text=input_text,
-        )
-        usage = self._merge_usage(planning_usage, subagent_usage, draft_usage, reflection.usage)
-        metadata = self._build_metadata(plan=plan, notes=notes, reflection=reflection, usage=usage)
+        try:
+            response = self.llm.generate(messages=messages, config=self._llm_config())
+            output = self._strip_think_tags(response.text).strip()
+            usage = self._normalize_usage(response.usage, prompt=prompt_text, output=output)
+        except Exception:
+            output = "Makasih udah cerita. Biar aku bantu lebih tepat, boleh aku tahu kondisi kulitmu sekarang?"
+            usage = self._normalize_usage({}, prompt=prompt_text, output=output)
 
-        return AgentResult(output=final_output, metadata=metadata)
+        provider, model = self._resolve_llm_identity()
+        return AgentResult(
+            output=output,
+            metadata={
+                "agent": "sales",
+                "model": {"provider": provider, "name": model},
+                "usage": usage,
+            },
+        )
 
     def execute_stream(
         self,
@@ -891,98 +204,28 @@ class PlannerAgent(BaseAgent):
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> Generator[dict, None, None]:
-        yield {"type": "thinking", "content": "Planner: menyusun strategi percakapan...\n"}
+        context = context or {}
+        system = self._build_system_prompt(context.get("memory_summary"))
+        messages = self._build_messages(input_text, history, system)
+        prompt_text = "\n".join(str(m.get("content", "")) for m in messages)
 
         try:
-            plan, planning_usage = self._plan_orchestration_with_llm(
-                input_text=input_text,
-                history=history,
-                context=context,
-            )
-            stage = plan.get("stage", "consultation")
-            yield {
-                "type": "thinking",
-                "content": (
-                    f"Planner micro-intent: {plan.get('micro_intent', 'explore_problem')}\n"
-                ),
-            }
-
-            history_text = self._format_history_for_planner(history)
-            notes: list[SubAgentResult] = []
-            subagent_usages: list[dict] = []
-            selected_subagents = self._select_support_agents(plan)
-            for _agent_key, subagent in selected_subagents:
-                note = subagent.run(
-                    input_text=input_text,
-                    history_text=history_text,
-                    plan=plan,
-                    previous_notes=notes,
-                    context=context,
-                )
-                notes.append(note)
-                subagent_usages.append(note.usage)
-                yield {
-                    "type": "thinking",
-                    "content": (
-                        f"Support agent aktif: {note.agent}\n"
-                    ),
-                }
-
-            draft_output, draft_usage = self._generate_draft(
-                input_text=input_text,
-                history=history,
-                plan=plan,
-                notes=notes,
-                context=context,
-            )
-            if self._should_run_reflection(plan=plan, input_text=input_text):
-                yield {"type": "thinking", "content": "Reflection: mengecek kualitas jawaban final...\n"}
-                reflection = self.reflection_agent.review(
-                    input_text=input_text,
-                    history_text=history_text,
-                    plan=plan,
-                    notes=notes,
-                    draft_response=draft_output,
-                )
-            else:
-                reflection = type(
-                    "ReflectionSkip",
-                    (),
-                    {
-                        "approved": True,
-                        "critique": [],
-                        "revised_response": draft_output,
-                        "usage": self._normalize_usage({}, prompt_text="", output_text=""),
-                    },
-                )()
-
-            final_output = (reflection.revised_response or draft_output).strip() or draft_output
-            final_output = self._enforce_output_constraints(
-                text=final_output,
-                plan=plan,
-                input_text=input_text,
-            )
-            usage = self._merge_usage(
-                planning_usage,
-                self._merge_usage(*subagent_usages),
-                draft_usage,
-                reflection.usage,
-            )
-            metadata = self._build_metadata(plan=plan, notes=notes, reflection=reflection, usage=usage)
-
-            for chunk in self._chunk_text(final_output):
-                yield {"type": "content", "content": chunk}
-
-            yield {"type": "meta", "metadata": metadata}
-            return
+            response = self.llm.generate(messages=messages, config=self._llm_config())
+            output = self._strip_think_tags(response.text).strip()
+            usage = self._normalize_usage(response.usage, prompt=prompt_text, output=output)
         except Exception:
-            fallback = "Maaf, bisa cerita ulang sedikit masalah kulitmu biar aku bantu lebih tepat?"
-            usage = self._normalize_usage({}, prompt_text=input_text, output_text=fallback)
-            metadata = self._build_metadata(
-                plan=self._default_plan(),
-                notes=[],
-                reflection=type("ReflectionFallback", (), {"approved": True, "critique": []})(),
-                usage=usage,
-            )
-            yield {"type": "content", "content": fallback}
-            yield {"type": "meta", "metadata": metadata}
+            output = "Maaf, bisa cerita ulang sedikit masalah kulitmu biar aku bantu lebih tepat?"
+            usage = self._normalize_usage({}, prompt=prompt_text, output=output)
+
+        for chunk in self._chunk_text(output):
+            yield {"type": "content", "content": chunk}
+
+        provider, model = self._resolve_llm_identity()
+        yield {
+            "type": "meta",
+            "metadata": {
+                "agent": "sales",
+                "model": {"provider": provider, "name": model},
+                "usage": usage,
+            },
+        }

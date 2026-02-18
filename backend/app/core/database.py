@@ -57,8 +57,6 @@ def init_app_database() -> None:
     logger.info("Initializing app database on %s", _safe_url(app_engine.url))
     ensure_app_database_exists()
 
-    from app.agents.database.models import SalesProduct
-    from app.agents.database.store import ensure_default_sales_product
     from app.modules.admin.models import AdminConfig, PromptOverride
     from app.modules.billing.models import LLMUsageEvent
     from app.modules.chatbot.models import (
@@ -76,10 +74,8 @@ def init_app_database() -> None:
         ConversationHistory,
         LLMUsageEvent,
         AgentMemory,
-        SalesProduct,
     )
     SQLModel.metadata.create_all(app_engine)
-    ensure_default_sales_product()
     logger.info("Application tables are ready on %s", _safe_url(app_engine.url))
 
 

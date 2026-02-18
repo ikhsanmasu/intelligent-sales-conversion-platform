@@ -40,11 +40,27 @@ _deploy_require_docker() {
   fi
 }
 
+_deploy_git_pull() {
+  if ! command -v git >/dev/null 2>&1; then
+    echo "[deploy] git command not found." >&2
+    return 1
+  fi
+
+  if [[ ! -d ".git" ]]; then
+    echo "[deploy] .git directory not found in current path." >&2
+    return 1
+  fi
+
+  echo "[deploy] pulling latest changes..."
+  git pull --ff-only
+}
+
 _deploy_run() {
   local mode="${1:-keep}"
   local compose_file="${2:-$DEPLOY_COMPOSE_FILE_DEFAULT}"
   local project_name="${3:-$DEPLOY_PROJECT_NAME_DEFAULT}"
 
+  _deploy_git_pull || return 1
   _deploy_require_docker || return 1
 
   if [[ ! -f "$compose_file" ]]; then
