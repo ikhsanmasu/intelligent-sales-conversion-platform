@@ -1,12 +1,16 @@
-import json
 import logging
 import threading
-from urllib import request as urllib_request
+import time
 
+import httpx
 from fastapi import HTTPException
 
 from app.channels.common import process_incoming_text
-from app.channels.media import format_testimony_reply_text, pick_random_testimonial_image
+from app.channels.media import (
+    format_testimony_reply_text,
+    looks_like_testimony_reply,
+    pick_random_testimonial_image,
+)
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -18,16 +22,21 @@ def _telegram_api_request(method: str, payload: dict) -> None:
         logger.warning("TELEGRAM_BOT_TOKEN is empty, skip Telegram API call: %s", method)
         return
 
-    data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
     url = f"https://api.telegram.org/bot{token}/{method}"
-    req = urllib_request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib_request.urlopen(req, timeout=20) as response:  # noqa: S310
-        _ = response.read()
+    with httpx.Client(timeout=20.0) as client:
+        response = client.post(url, json=payload)
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"raw": response.text}
+
+        if response.status_code >= 400:
+            raise RuntimeError(
+                f"Telegram API {method} failed ({response.status_code}): {body}"
+            )
+
+        if not body.get("ok", False):
+            raise RuntimeError(f"Telegram API error on {method}: {body}")
 
 
 def _send_telegram_message(chat_id: str, text: str) -> None:
@@ -63,29 +72,52 @@ def _send_telegram_typing_action(chat_id: str) -> None:
 class _TelegramTypingHeartbeat:
     """Keep Telegram typing indicator alive while response is being generated."""
 
-    def __init__(self, chat_id: str, interval_seconds: float = 4.0):
+    def __init__(
+        self,
+        chat_id: str,
+        interval_seconds: float = 3.5,
+        minimum_visible_seconds: float = 1.4,
+    ):
         self._chat_id = chat_id
         self._interval_seconds = interval_seconds
+        self._minimum_visible_seconds = minimum_visible_seconds
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self._started_at = 0.0
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
             try:
                 _send_telegram_typing_action(self._chat_id)
             except Exception as exc:  # noqa: BLE001
-                logger.debug("Failed to send Telegram typing action: %s", exc)
+                logger.warning("Failed to send Telegram typing action: %s", exc)
             if self._stop_event.wait(self._interval_seconds):
                 return
 
     def __enter__(self):
+        self._started_at = time.monotonic()
         self._thread.start()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed = time.monotonic() - self._started_at
+        remaining = self._minimum_visible_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
         self._stop_event.set()
         self._thread.join(timeout=1.0)
         return False
+
+
+def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: str) -> bool:
+    if stage == "testimony":
+        return True
+
+    lowered = (user_text or "").lower()
+    if any(token in lowered for token in {"testimoni", "review", "bukti", "real"}):
+        return True
+
+    return looks_like_testimony_reply(assistant_text)
 
 
 def _extract_text_message(payload: dict) -> tuple[str, str] | None:
@@ -123,17 +155,36 @@ def handle_webhook(payload: dict, secret_header: str | None = None) -> dict:
     metadata = result.get("assistant_metadata") or {}
     stage = str(metadata.get("stage") or "").strip().lower()
     reply_text = str(result.get("reply_text") or "").strip()
-    if stage == "testimony" and reply_text:
+
+    if _should_attach_testimony_media(stage=stage, user_text=text, assistant_text=reply_text) and reply_text:
         try:
             image = pick_random_testimonial_image()
-            _send_telegram_photo(
-                chat_id=chat_id,
-                photo_url=image.image_url,
-                caption=f"🎬 Vibes testimoni hari ini: {image.title}",
-            )
+            caption = f"Vibes testimoni hari ini: {image.title}"
+            try:
+                _send_telegram_photo(
+                    chat_id=chat_id,
+                    photo_url=image.image_url,
+                    caption=caption,
+                )
+            except Exception as photo_exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to send Telegram photo, fallback to link text: %s",
+                    photo_exc,
+                )
+                try:
+                    _send_telegram_message(
+                        chat_id=chat_id,
+                        text=f"{caption}\n{image.image_url}",
+                    )
+                except Exception as fallback_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Failed to send Telegram photo fallback text: %s",
+                        fallback_exc,
+                    )
             reply_text = format_testimony_reply_text(reply_text)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to send Telegram testimonial photo: %s", exc)
+            logger.exception("Failed to prepare Telegram testimonial media: %s", exc)
+            reply_text = format_testimony_reply_text(reply_text)
 
     if reply_text:
         try:

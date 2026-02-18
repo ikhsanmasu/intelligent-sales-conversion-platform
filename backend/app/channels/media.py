@@ -43,16 +43,35 @@ _TESTIMONIAL_CELEBRITY_IMAGES: list[ChannelImage] = [
 ]
 
 
+_TESTIMONY_SIGNAL_TOKENS = {
+    "@amandabilla",
+    "@silmisyauz",
+    "testimoni",
+    "review",
+    "pengguna",
+    "real",
+}
+
+
 def pick_random_testimonial_image() -> ChannelImage:
     return random.choice(_TESTIMONIAL_CELEBRITY_IMAGES)
+
+
+def looks_like_testimony_reply(text: str) -> bool:
+    lowered = str(text or "").lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _TESTIMONY_SIGNAL_TOKENS)
 
 
 def format_testimony_reply_text(base_text: str) -> str:
     clean = str(base_text or "").strip()
     if not clean:
         return ""
+    if clean.lower().startswith("testimoni real pengguna"):
+        return clean
     return (
-        "✨ Testimoni Real Pengguna\n\n"
+        "Testimoni real pengguna\n\n"
         f"{clean}\n\n"
         "Kalau mau, aku bantu lanjut ke cara pakai paling aman buat kondisi kulit kamu."
     )
