@@ -1,17 +1,23 @@
+import json
 import re
 from collections.abc import Generator
-from dataclasses import dataclass, field
 
 from app.agents.base import AgentResult, BaseAgent
+from app.agents.planner.subagents import (
+    ConsultationSubAgent,
+    EmpathySubAgent,
+    ProductKnowledgeSubAgent,
+    ReflectionSubAgent,
+    SubAgentResult,
+    render_notes_for_prompt,
+)
 from app.core.config import settings
 from app.core.llm.base import BaseLLM
 from app.core.llm.schemas import GenerateConfig
 from app.modules.admin.service import resolve_config, resolve_prompt
 
-# ---------------------------------------------------------------------------
-# Product Knowledge — full version (injected conditionally by stage)
-# ---------------------------------------------------------------------------
-PRODUCT_KNOWLEDGE_FULL = """Produk yang kamu jual:
+
+PRODUCT_KNOWLEDGE_FULL = """Produk yang dijual:
 - Nama: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP)
 - Harga: Rp110.900
 - Kemasan: 60 g
@@ -25,12 +31,12 @@ mengangkat sebum berlebih, kotoran, dan sel kulit mati.
 
 Manfaat utama:
 - Membantu menghambat bakteri penyebab jerawat (uji in-vitro)
-- Mencegah bakteri penyebab jerawat
+- Membantu mencegah jerawat baru
 - Membantu mengurangi minyak berlebih
 - Membantu membersihkan hingga ke pori
 - Membantu mengangkat sel kulit mati
 - Scrub lembut biodegradable
-- Terbukti secara klinis mengontrol sebum hingga 8 jam
+- Terbukti secara klinis membantu kontrol sebum hingga 8 jam
 - Menjaga kelembapan kulit
 - Tidak menimbulkan iritasi
 
@@ -41,7 +47,7 @@ Kandungan utama:
 
 Cara pakai:
 - Basahi wajah
-- Aplikasikan dan pijat lembut
+- Aplikasikan lalu pijat lembut
 - Bilas hingga bersih
 - Gunakan 2-3 kali sehari
 
@@ -51,345 +57,105 @@ Ketentuan pengiriman dan komplain:
 - Tanpa video unboxing, komplain tidak diproses
 
 Testimoni:
-1) Amanda (amandabilla98):
-   "Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming dan ngebantu redain jerawat yang lagi meradang."
-2) Silmi (silmisyauz):
-   "Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much."
+1) @amandabilla98 (Amanda):
+"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming dan ngebantu redain jerawat yang lagi meradang."
+2) @silmisyauz (Silmi):
+"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much."
 """
 
 PRODUCT_KNOWLEDGE_BRIEF = (
-    "Produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP) — "
-    "sabun pembersih wajah untuk kulit berjerawat/berminyak, Rp110.900/60g."
+    "Produk tunggal yang dijual: ERHA Acneact Acne Cleanser Scrub Beta Plus "
+    "(ACSBP), untuk kulit berjerawat dan berminyak, harga Rp110.900 per 60 g."
 )
 
-# ---------------------------------------------------------------------------
-# Base System Prompt — streamlined
-# ---------------------------------------------------------------------------
 BASE_SYSTEM_PROMPT = """Kamu adalah Ira Acneact Care Assistant.
-Kamu HANYA menjual satu produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP).
-Semua pertanyaan tentang produk = tentang ERHA ACSBP. Kamu SUDAH TAU produknya.
+Kamu hanya menjual satu produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP).
 
-GAYA NGOBROL:
-- Kamu itu TEMAN, bukan sales agresif. Ngobrol santai kayak chat sama bestie.
-- Bahasa Indonesia santai-sopan, pakai "kak", bisa pakai emoji sesekali.
-- JAWAB SINGKAT. Maksimal 2-3 kalimat per respons.
-- JANGAN PERNAH bilang "mau aku bantu checkout/order?" kecuali user SENDIRI yang minta beli.
-- JANGAN ajak beli di awal percakapan. Bangun obrolan dulu, bikin nyaman.
-
-ATURAN KETAT:
-- JANGAN PERNAH minta user kirim foto produk, nama produk, atau kode produk.
-- JANGAN PERNAH bertanya "produk yang mana?" — kamu hanya jual SATU produk.
-- Jika ditanya "aman ga?" / "udah bpom?" → WAJIB sebut nomor BPOM NA18201202832 dan Halal MUI 00150086800118.
-- Jika ditanya "ini siapa?" / "kak siapa?" → jawab "Aku Lia dari tim Mengantar".
-- JANGAN PERNAH ASUMSI masalah kulit user. Jika user belum cerita spesifik, TANYA DULU.
-- JANGAN langsung sebut nama produk/harga kalau user belum cerita masalahnya.
-- Jangan mengarang data, jangan klaim medis berlebihan.
-
-ALUR NATURAL:
-1. Kenalan → tanya nama (JANGAN tanya masalah kulit di sini)
-2. Setelah tau nama → tanya ada keluhan kulit apa (santai, 1 pertanyaan aja)
-3. Setelah user cerita masalah → empati dulu, baru pelan-pelan kasih tau ada produk yang bisa bantu
-4. Setelah user kepo → baru jelasin detail produk
-5. User yang tertarik → baru ajak beli
-
-JANGAN LONCAT TAHAP. Sabar. Satu langkah satu langkah.
+Aturan wajib:
+1) Bahasa ramah, santai, natural seperti manusia.
+2) Soft-selling empatik: validasi user dulu, lalu bantu dengan solusi.
+3) Struktur persuasi: Story -> Benefit -> Ajakan lembut.
+4) Jangan memaksa beli.
+5) Jangan mengarang data.
+6) Maksimal 1 pertanyaan follow-up per balasan.
+7) Fokus user merasa dipahami, bukan merasa dijuali.
 """
 
-# ---------------------------------------------------------------------------
-# Rich Stage Prompts
-# ---------------------------------------------------------------------------
-STAGE_PROMPTS = {
-    "greeting": {
-        "instruction": (
-            "- Perkenalkan diri: 'Hai kak! Aku Lia dari Mengantar.'\n"
-            "- Tanyakan nama user SAJA. Cukup tanya nama, JANGAN tanya yang lain.\n"
-            "- JANGAN tanya masalah kulit, JANGAN sebut produk, JANGAN jualan."
-        ),
-        "tone": "Hangat, bersahabat, seperti teman yang baru kenalan.",
-        "emotional_hook": "Buat user merasa disambut dan nyaman.",
-        "do_not": "JANGAN sebut produk, harga, kulit, skincare, atau apapun selain perkenalan dan tanya nama.",
-        "example_pattern": (
-            "Hai kak! Aku Lia dari Mengantar~ Boleh tau nama kakak siapa?"
-        ),
-        "transition_trigger": "User menyebut nama.",
-        "response_length": "1-2 kalimat SAJA. Cuma sapa + tanya nama.",
-    },
-    "opening": {
-        "instruction": (
-            "- Sapa pakai nama user, senang kenalan.\n"
-            "- Tanya santai ada keluhan kulit apa. CUKUP 1 pertanyaan.\n"
-            "- JANGAN sebut nama produk, harga, atau 'bantu order'."
-        ),
-        "tone": "Santai kayak ngobrol sama temen.",
-        "emotional_hook": "Bikin user nyaman cerita.",
-        "do_not": "JANGAN sebut nama produk, harga, order, checkout. JANGAN nawarin apa-apa.",
-        "example_pattern": (
-            "Salam kenal Kak [nama]! Btw, ada keluhan kulit yang lagi ganggu nggak?"
-        ),
-        "transition_trigger": "User menceritakan masalah kulit.",
-        "response_length": "1-2 kalimat. Sapa nama + 1 pertanyaan santai.",
-    },
-    "consultation": {
-        "instruction": (
-            "- Jika user BELUM cerita masalah → tanya dulu: 'Masalah kulit apa kak?'\n"
-            "- Jika user SUDAH cerita masalah (jerawat, berminyak, dll) → EMPATI dulu.\n"
-            "  Contoh: 'Duh jerawat emang nyebelin ya kak' lalu tanya lebih detail.\n"
-            "- JANGAN langsung sebut nama produk atau harga saat user baru cerita masalah.\n"
-            "- Setelah 1-2 kali empati/tanya detail, BARU bilang 'Aku ada rekomendasi nih' (tanpa detail).\n"
-            "- Jika user tanya keamanan/BPOM → sebut BPOM NA18201202832 dan Halal MUI 00150086800118.\n"
-            "- JANGAN ajak beli/checkout/order di tahap ini."
-        ),
-        "tone": "Seperti teman yang dengerin curhat, bukan sales.",
-        "emotional_hook": "Bikin user merasa didengar dan dipahami.",
-        "do_not": "JANGAN sebut nama produk lengkap, harga, atau ajak order. JANGAN asumsi masalah tanpa user cerita.",
-        "example_pattern": (
-            "Duh jerawat emang bikin ga pede ya kak :( Udah dari kapan nih? "
-            "Sering muncul di area mana?"
-        ),
-        "transition_trigger": "User sudah cerita detail + Lia sudah empati → baru boleh mention produk secara umum.",
-        "response_length": "2-3 kalimat. Empati + 1 pertanyaan follow-up. TANPA sebut produk.",
-    },
-    "testimony": {
-        "instruction": (
-            "- KUTIP PERSIS KATA PER KATA testimoni di bawah. JANGAN UBAH, JANGAN PARAFRASE, JANGAN SINGKAT.\n"
-            "- Hubungkan testimoni dengan masalah spesifik user.\n"
-            "- Gunakan format @username untuk kredibilitas.\n"
-            "- Boleh tambahkan konteks singkat sebelum/sesudah kutipan.\n\n"
-            "TESTIMONI VERBATIM (wajib dikutip persis):\n\n"
-            "1) @amandabilla98 (Amanda):\n"
-            "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
-            "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
-            "dan ngebantu redain jerawat yang lagi meradang.\"\n\n"
-            "2) @silmisyauz (Silmi):\n"
-            "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
-            "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
-            "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
-            "ada tapi gak to much.\""
-        ),
-        "tone": "Antusias berbagi cerita sukses, seperti kasih rekomendasi ke teman.",
-        "emotional_hook": "Social proof — orang lain dengan masalah serupa sudah terbantu.",
-        "do_not": "DILARANG mengubah, menyingkat, atau memparafrase testimoni. Kutip PERSIS.",
-        "example_pattern": (
-            "Oh iya, ada yang ceritanya mirip kayak kamu nih!\n\n"
-            "@amandabilla98 (Amanda) bilang:\n"
-            "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
-            "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
-            "dan ngebantu redain jerawat yang lagi meradang.\"\n\n"
-            "Terus @silmisyauz (Silmi) juga bilang:\n"
-            "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
-            "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
-            "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
-            "ada tapi gak to much.\"\n\n"
-            "Relatable kan?"
-        ),
-        "transition_trigger": "User tertarik / mau tau harga / mau beli.",
-        "response_length": "Kutip KEDUA testimoni LENGKAP + 1-2 kalimat konteks. Jangan potong.",
-    },
-    "promo": {
-        "instruction": (
-            "- Sampaikan harga produk: Rp110.900 untuk 60g.\n"
-            "- Berikan dorongan beli yang relevan tanpa klaim promo palsu.\n"
-            "- Boleh suggest: cek promo ongkir, benefit berdasarkan lokasi.\n"
-            "- Tekankan value: harga terjangkau untuk produk BPOM + Halal.\n"
-            "- Frame sebagai investasi untuk kulit, bukan pengeluaran."
-        ),
-        "tone": "Excited tapi jujur, seperti kasih info deal bagus ke teman.",
-        "emotional_hook": "FOMO halus — 'sayang kalau nggak dicoba' tanpa tekanan.",
-        "do_not": "Jangan buat angka diskon fiktif atau promo yang tidak ada.",
-        "example_pattern": (
-            "Nah, kabar baiknya harganya cuma Rp110.900 aja lho untuk 60g! "
-            "Udah BPOM dan Halal MUI juga. Worth it banget sih buat investasi kulit sehat. "
-            "Mau aku bantu proses pesanannya?"
-        ),
-        "transition_trigger": "User bilang mau beli / minta cara order.",
-        "response_length": "3-4 kalimat. Harga + value proposition + CTA.",
-    },
-    "closing": {
-        "instruction": (
-            "- Berikan instruksi order yang JELAS dan langkah-langkah konkret.\n"
-            "- Minta alamat lengkap untuk pengiriman.\n"
-            "- Infokan kebijakan komplain: wajib video unboxing tanpa putus.\n"
-            "- Buat user merasa keputusannya tepat (reinforcement positif).\n"
-            "- Jika user ragu, handle objection dengan empati."
-        ),
-        "tone": "Supportive dan clear, seperti bantu teman checkout.",
-        "emotional_hook": "Reinforcement — 'pilihan bagus, kulit kamu pasti seneng!'",
-        "do_not": "Jangan skip info kebijakan komplain.",
-        "example_pattern": (
-            "Yay, pilihan bagus! Biar aku bantu ya. Untuk prosesnya:\n"
-            "1. Kirim alamat lengkap kamu\n"
-            "2. Nanti aku info total + ongkirnya\n"
-            "Oh iya, satu hal penting: kalau nanti ada kendala, pastikan rekam video unboxing "
-            "tanpa putus ya, karena itu syarat untuk proses komplain."
-        ),
-        "transition_trigger": "User konfirmasi order / kirim alamat.",
-        "response_length": "4-6 kalimat. Langkah order + kebijakan komplain.",
-    },
-    "farewell": {
-        "instruction": (
-            "- Tutup percakapan dengan hangat dan PERSONAL.\n"
-            "- Sebutkan kembali masalah/kekhawatiran spesifik user dari percakapan (misal: jerawat meradang, kulit berminyak).\n"
-            "- Referensikan perjalanan percakapan (misal: 'seneng bisa bantu kamu soal jerawat tadi').\n"
-            "- Ucapkan terima kasih.\n"
-            "- Buka pintu untuk konsultasi lanjutan di masa depan.\n"
-            "- Jika sudah order: ingatkan soal video unboxing."
-        ),
-        "tone": "Hangat dan caring, seperti pamitan sama teman yang udah curhat.",
-        "emotional_hook": "Buat user merasa dihargai secara personal, bukan template.",
-        "do_not": "Jangan hard-sell di tahap ini. Jangan pakai template generik tanpa referensi percakapan.",
-        "example_pattern": (
-            "Makasih ya udah cerita soal masalah jerawatnya! Semoga ERHA ACSBP-nya bisa bantu "
-            "redain jerawat kamu yang lagi meradang itu. Kalau nanti ada pertanyaan lagi soal "
-            "skincare, jangan sungkan chat aku ya~ Semangat!"
-        ),
-        "transition_trigger": "",
-        "response_length": "2-3 kalimat. Personal, singkat, dan hangat.",
-    },
-}
-
-# ---------------------------------------------------------------------------
-# Intent keywords
-# ---------------------------------------------------------------------------
-ORDER_INTENT_KEYWORDS = {
-    "beli", "checkout", "co", "ambil", "pesan", "order", "gas", "lanjut",
-}
-PROMO_KEYWORDS = {
-    "promo", "diskon", "ongkir", "gratis ongkir", "voucher", "harga", "murah",
-    "berapa", "harganya",
-}
-TESTIMONY_KEYWORDS = {
-    "testimoni", "review", "bukti", "cocok gak", "yakin",
-    "pengalaman", "real",
-}
-CONSULTATION_KEYWORDS = {
-    "jerawat", "berminyak", "bruntusan", "kusam", "iritasi", "komedo", "sensitif",
-    "aman", "bpom", "halal",
-}
-FAREWELL_KEYWORDS = {
-    "makasih", "terima kasih", "thanks", "oke sip", "dadah", "bye",
-}
-
-# Short keywords (≤3 chars) that need word-boundary matching to avoid false positives
-_SHORT_KEYWORDS = {"co", "gas", "bye"}
-
-# Knowledge tiers: brief for greeting/farewell, full for everything else
+_STAGE_ORDER = [
+    "greeting",
+    "opening",
+    "consultation",
+    "testimony",
+    "promo",
+    "closing",
+    "farewell",
+]
+_VALID_STAGES = set(_STAGE_ORDER)
 _KNOWLEDGE_BRIEF_STAGES = {"greeting", "farewell"}
-# All other stages get full knowledge
-
-# Ordered stages for progression
-_STAGE_ORDER = ["greeting", "opening", "consultation", "testimony", "promo", "closing", "farewell"]
-
 _MAX_HISTORY_MESSAGES = 15
+_MAX_PLAN_HISTORY_MESSAGES = 12
+
+_DEFAULT_STAGE_OBJECTIVES = {
+    "greeting": "Bangun koneksi awal yang hangat.",
+    "opening": "Gali masalah utama user dengan natural.",
+    "consultation": "Hubungkan masalah user dengan solusi produk secara empatik.",
+    "testimony": "Bangun trust dengan bukti sosial yang relevan.",
+    "promo": "Jelaskan value produk dengan ajakan lembut.",
+    "closing": "Dorong transaksi dengan langkah jelas tanpa tekanan.",
+    "farewell": "Akhiri percakapan secara hangat dan suportif.",
+}
 
 _STAGE_COMPACT_GUIDANCE = {
-    "greeting": "Sapa + perkenalan: 'Aku Ira Acneact Care Assistant yang siap membantu masalah kulit wajahmu.' Tanya nama SAJA. MAX 1-2 kalimat. JANGAN tanya yg lain.",
-    "opening": "Sapa nama user, tanya santai ada keluhan kulit apa. MAX 1-2 kalimat. JANGAN sebut produk.",
-    "consultation": "Empati dulu, tanya detail masalah. JANGAN langsung sebut produk/harga/ajak beli. MAX 2-3 kalimat.",
-    "testimony": "Berikan 1 testimoni paling relevan. Berikan kedua jika diminta. MAX 2-3 kalimat + kutipan.",
-    "promo": "Sebut harga Rp110.900, BPOM + Halal. Tanya mau coba? MAX 2-3 kalimat.",
-    "closing": "Langkah order jelas, minta alamat, ingatkan video unboxing. MAX 3 kalimat.",
-    "farewell": "Tutup hangat dan personal. MAX 2 kalimat.",
+    "greeting": "Sapa hangat dan personal. Bila perlu tanya satu hal ringan.",
+    "opening": "Validasi masalah user, lalu gali inti kebutuhannya.",
+    "consultation": "Empati dulu, berikan solusi relevan, lalu ajakan halus.",
+    "testimony": "Pakai social proof relevan tanpa terkesan memaksa.",
+    "promo": "Tekankan manfaat dan value, bukan sekadar harga.",
+    "closing": "Berikan langkah order dengan bahasa ramah.",
+    "farewell": "Tutup percakapan dengan nada positif.",
 }
 
-_TESTIMONIAL_QUOTES = [
-    (
-        "@amandabilla98 (Amanda): "
-        "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
-        "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
-        "dan ngebantu redain jerawat yang lagi meradang.\""
-    ),
-    (
-        "@silmisyauz (Silmi): "
-        "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
-        "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
-        "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
-        "ada tapi gak to much.\""
-    ),
-]
+_PLANNER_SYSTEM_PROMPT = """Kamu adalah Planner Agent utama untuk sales skincare.
+Tugasmu: menentukan rencana SATU bubble balasan berikutnya berbasis konteks percakapan.
+
+Tujuan global:
+- Natural, empatik, tidak robotik.
+- Soft-selling: fokus solusi, bukan paksaan.
+- Struktur: Story -> Benefit -> Ajakan lembut.
+- Maksimal satu pertanyaan follow-up.
+
+Balas JSON valid saja (tanpa markdown):
+{
+  "stage": "consultation",
+  "stage_reason": "alasan singkat pemilihan stage",
+  "objective": "tujuan bubble ini",
+  "tone": "gaya bahasa spesifik",
+  "soft_closing_strategy": "cara ajakan lembut",
+  "persuasion": {
+    "story": "framing masalah user",
+    "benefit": "manfaat yang mau ditekankan",
+    "gentle_cta": "ajakan halus"
+  },
+  "ask_follow_up": true,
+  "follow_up_question": "pertanyaan follow-up tunggal jika perlu",
+  "must_include": ["poin wajib"],
+  "must_avoid": ["poin yang harus dihindari"],
+  "agent_priorities": ["prioritas untuk subagent"]
+}
+"""
 
 
-# ---------------------------------------------------------------------------
-# Conversation State
-# ---------------------------------------------------------------------------
-@dataclass
-class ConversationState:
-    """Tracks which stages have been covered in conversation history."""
-    covered_stages: set[str] = field(default_factory=set)
-    current_intent: str = "general"
-    resolved_stage: str = "greeting"
-
-
-# ---------------------------------------------------------------------------
-# ThinkFilter — streaming state machine for <think> tags
-# ---------------------------------------------------------------------------
-class ThinkFilter:
-    """Filters out <think>...</think> blocks from a token stream."""
-
-    def __init__(self):
-        self._inside_think = False
-        self._buffer = ""
-
-    def feed(self, token: str) -> str:
-        """Feed a token, return filtered output (may be empty)."""
-        self._buffer += token
-        output = []
-
-        while self._buffer:
-            if self._inside_think:
-                end_idx = self._buffer.find("</think>")
-                if end_idx != -1:
-                    self._buffer = self._buffer[end_idx + len("</think>"):]
-                    self._inside_think = False
-                else:
-                    # Could be partial tag — keep buffering
-                    if len(self._buffer) > 500:
-                        self._buffer = self._buffer[-20:]
-                    break
-            else:
-                start_idx = self._buffer.find("<think>")
-                if start_idx != -1:
-                    output.append(self._buffer[:start_idx])
-                    self._buffer = self._buffer[start_idx + len("<think>"):]
-                    self._inside_think = True
-                elif "<" in self._buffer and not self._buffer.endswith(">"):
-                    # Possible partial <think> tag — flush safe part
-                    last_lt = self._buffer.rfind("<")
-                    tail = self._buffer[last_lt:]
-                    if "<think>"[:len(tail)] == tail:
-                        output.append(self._buffer[:last_lt])
-                        self._buffer = tail
-                        break
-                    else:
-                        output.append(self._buffer)
-                        self._buffer = ""
-                else:
-                    output.append(self._buffer)
-                    self._buffer = ""
-
-        return "".join(output)
-
-    def flush(self) -> str:
-        """Flush remaining buffer."""
-        if self._inside_think:
-            self._buffer = ""
-            return ""
-        out = self._buffer
-        self._buffer = ""
-        return out
-
-
-# ---------------------------------------------------------------------------
-# PlannerAgent
-# ---------------------------------------------------------------------------
 class PlannerAgent(BaseAgent):
     def __init__(self, llm: BaseLLM):
         super().__init__(llm)
-
-    # -- Utility ----------------------------------------------------------
+        self.empathy_agent = EmpathySubAgent(llm=llm)
+        self.product_agent = ProductKnowledgeSubAgent(llm=llm)
+        self.consultation_agent = ConsultationSubAgent(llm=llm)
+        self.reflection_agent = ReflectionSubAgent(llm=llm)
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL).strip()
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -397,9 +163,8 @@ class PlannerAgent(BaseAgent):
             return 0
         return max(1, round(len(text) / 4))
 
-    def _normalize_usage(self, raw_usage: dict, prompt_text: str, output_text: str) -> dict:
+    def _normalize_usage(self, raw_usage: dict | None, prompt_text: str, output_text: str) -> dict:
         raw_usage = raw_usage or {}
-
         prompt_tokens = (
             raw_usage.get("prompt_tokens")
             or raw_usage.get("input_tokens")
@@ -434,194 +199,289 @@ class PlannerAgent(BaseAgent):
         }
 
     @staticmethod
+    def _merge_usage(*usages: dict) -> dict:
+        merged = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+        for usage in usages:
+            if not isinstance(usage, dict):
+                continue
+            for key in merged:
+                try:
+                    merged[key] += int(usage.get(key, 0) or 0)
+                except Exception:
+                    pass
+        merged["total_tokens"] = merged["prompt_tokens"] + merged["completion_tokens"]
+        merged["input_tokens"] = merged["prompt_tokens"]
+        merged["output_tokens"] = merged["completion_tokens"]
+        return merged
+
+    @staticmethod
     def _resolve_llm_identity() -> tuple[str, str]:
         provider = settings.CHATBOT_DEFAULT_LLM
         model = settings.CHATBOT_DEFAULT_MODEL
-
         try:
             planner_provider = resolve_config("llm_planner", "provider")
             planner_model = resolve_config("llm_planner", "model")
             fallback_provider = resolve_config("llm", "default_provider")
             fallback_model = resolve_config("llm", "default_model")
-
             provider = planner_provider or fallback_provider or provider
             model = planner_model or fallback_model or model
         except Exception:
             pass
-
         return str(provider), str(model)
-
-    # -- Stage Detection (hybrid) -----------------------------------------
-
-    @staticmethod
-    def _match_keywords(message: str, keywords: set[str]) -> bool:
-        """Match keywords against message. Short keywords (≤3 chars) use
-        word-boundary regex to prevent substring false-positives
-        (e.g. 'co' must not match 'cocok')."""
-        for kw in keywords:
-            if kw in _SHORT_KEYWORDS:
-                if re.search(rf"\b{re.escape(kw)}\b", message):
-                    return True
-            else:
-                if kw in message:
-                    return True
-        return False
-
-    @staticmethod
-    def _detect_intent(input_text: str) -> str:
-        """Detect the user's current intent from their message."""
-        message = input_text.lower()
-
-        if PlannerAgent._match_keywords(message, FAREWELL_KEYWORDS):
-            return "farewell"
-        if PlannerAgent._match_keywords(message, ORDER_INTENT_KEYWORDS):
-            return "order"
-        if PlannerAgent._match_keywords(message, PROMO_KEYWORDS):
-            return "price"
-        if PlannerAgent._match_keywords(message, TESTIMONY_KEYWORDS):
-            return "testimony"
-        if PlannerAgent._match_keywords(message, CONSULTATION_KEYWORDS):
-            return "skin_concern"
-        return "general"
-
-    @staticmethod
-    def _build_state(history: list[dict] | None) -> ConversationState:
-        """Scan conversation history to determine which stages have been covered."""
-        state = ConversationState()
-        history = history or []
-
-        assistant_messages = [
-            m.get("content", "").lower()
-            for m in history
-            if m.get("role") == "assistant"
-        ]
-        all_text = " ".join(assistant_messages)
-
-        if not assistant_messages:
-            return state
-
-        # Check covered stages by content analysis
-        # Greeting: assistant has greeted (require greeting-specific phrases)
-        greet_signals = ["selamat datang", "seneng banget kamu mampir", "kenalan dulu", "boleh tau nama"]
-        if any(s in all_text for s in greet_signals):
-            state.covered_stages.add("greeting")
-
-        # Opening: assistant introduced self as advisor / asked about skin
-        opening_signals = ["beauty advisor", "bantu soal skincare", "ada keluhan kulit", "masalah kulit"]
-        if any(s in all_text for s in opening_signals):
-            state.covered_stages.add("opening")
-
-        # Consultation: discussed product ingredients with product context
-        _product_terms = {"erha", "acsbp", "acneact", "produk"}
-        _ingredient_terms = {"bha", "sulphur", "scrub biodegradable"}
-        has_product = any(t in all_text for t in _product_terms)
-        has_ingredient = any(t in all_text for t in _ingredient_terms)
-        consult_signals = ["membersihkan pori", "minyak berlebih", "menghambat bakteri"]
-        if (has_product and has_ingredient) or any(s in all_text for s in consult_signals):
-            state.covered_stages.add("consultation")
-
-        # Testimony: shared actual testimonials (require username mentions)
-        testi_signals = ["amandabilla98", "silmisyauz", "@amandabilla", "@silmisyauz"]
-        if any(s in all_text for s in testi_signals):
-            state.covered_stages.add("testimony")
-
-        # Promo: mentioned specific price
-        promo_signals = ["110.900", "110900", "rp110"]
-        if any(s in all_text for s in promo_signals):
-            state.covered_stages.add("promo")
-
-        # Closing: gave order instructions
-        closing_signals = ["alamat lengkap", "proses pesanan", "video unboxing"]
-        if any(s in all_text for s in closing_signals):
-            state.covered_stages.add("closing")
-
-        return state
-
-    @staticmethod
-    def _resolve_stage(intent: str, state: ConversationState) -> str:
-        """Combine intent + state — honor user intent directly, no rigid prerequisites."""
-        if intent == "farewell":
-            return "farewell"
-        if intent == "order":
-            return "closing"
-        if intent == "price":
-            return "promo"
-        if intent == "testimony":
-            return "testimony"
-        if intent == "skin_concern":
-            return "consultation"
-
-        # General intent: progress through stages naturally
-        for stage in _STAGE_ORDER:
-            if stage not in state.covered_stages:
-                return stage
-
-        return "closing"
-
-    def _analyze_conversation(
-        self, input_text: str, history: list[dict] | None
-    ) -> tuple[str, ConversationState]:
-        """Full conversation analysis: returns (stage, state)."""
-        intent = self._detect_intent(input_text)
-        state = self._build_state(history)
-        state.current_intent = intent
-        stage = self._resolve_stage(intent, state)
-        state.resolved_stage = stage
-        return stage, state
-
-    # -- Message Building -------------------------------------------------
 
     @staticmethod
     def _trim_history(history: list[dict] | None, max_messages: int = _MAX_HISTORY_MESSAGES) -> list[dict]:
         if not history:
             return []
         normalized = [
-            {"role": h.get("role", ""), "content": str(h.get("content", ""))}
-            for h in history
-            if h.get("role") in {"user", "assistant"} and str(h.get("content", "")).strip()
+            {"role": item.get("role", ""), "content": str(item.get("content", ""))}
+            for item in history
+            if item.get("role") in {"user", "assistant"} and str(item.get("content", "")).strip()
         ]
         if len(normalized) <= max_messages:
             return normalized
         return normalized[-max_messages:]
 
+    def _format_history_for_planner(self, history: list[dict] | None) -> str:
+        trimmed = self._trim_history(history, max_messages=_MAX_PLAN_HISTORY_MESSAGES)
+        if not trimmed:
+            return "(no history)"
+        rows = []
+        for item in trimmed:
+            role = "USER" if item.get("role") == "user" else "ASSISTANT"
+            content = " ".join(str(item.get("content", "")).split())
+            rows.append(f"{role}: {content[:320]}")
+        return "\n".join(rows)
+
     @staticmethod
-    def _build_compact_stage_block(stage: str, input_text: str) -> str:
-        guidance = _STAGE_COMPACT_GUIDANCE.get(stage, _STAGE_COMPACT_GUIDANCE["consultation"])
+    def _extract_json_object(text: str) -> dict:
+        content = (text or "").strip()
+        if not content:
+            return {}
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, flags=re.DOTALL)
+        if fenced:
+            content = fenced.group(1).strip()
+        else:
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                content = content[start : end + 1]
+        try:
+            return json.loads(content)
+        except Exception:
+            repaired = re.sub(r",\s*([}\]])", r"\1", content)
+            try:
+                return json.loads(repaired)
+            except Exception:
+                return {}
+
+    @staticmethod
+    def _normalize_list(value: object, fallback: list[str] | None = None, max_items: int = 8) -> list[str]:
+        if isinstance(value, list):
+            out = [str(item).strip() for item in value if str(item).strip()]
+            return out[:max_items] if out else (fallback or [])
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return fallback or []
+
+    def _default_plan(self) -> dict:
+        return {
+            "stage": "consultation",
+            "stage_reason": "fallback plan",
+            "objective": _DEFAULT_STAGE_OBJECTIVES["consultation"],
+            "tone": "ramah, santai, empatik",
+            "soft_closing_strategy": "beri solusi dulu lalu ajak lanjut dengan halus",
+            "persuasion": {
+                "story": "Validasi cerita user tentang masalah kulit.",
+                "benefit": "Pilih manfaat produk yang paling relevan.",
+                "gentle_cta": "Ajak lanjut tanpa tekanan.",
+            },
+            "ask_follow_up": True,
+            "follow_up_question": "",
+            "must_include": [
+                "nada empatik",
+                "story -> benefit -> ajakan lembut",
+            ],
+            "must_avoid": [
+                "hard-selling",
+                "mengarang data",
+                "lebih dari satu pertanyaan",
+            ],
+            "agent_priorities": [
+                "empathy first",
+                "factual accuracy",
+                "consultative closing",
+            ],
+        }
+
+    def _normalize_plan(self, raw_plan: dict) -> dict:
+        plan = raw_plan if isinstance(raw_plan, dict) else {}
+        default = self._default_plan()
+        persuasion = plan.get("persuasion")
+        if not isinstance(persuasion, dict):
+            persuasion = {}
+
+        stage = str(plan.get("stage") or default["stage"]).strip().lower()
+        if stage not in _VALID_STAGES:
+            stage = default["stage"]
+
+        ask_follow_up = bool(plan.get("ask_follow_up", default["ask_follow_up"]))
+        follow_up_question = str(plan.get("follow_up_question") or "").strip()
+        if not ask_follow_up:
+            follow_up_question = ""
+
+        return {
+            "stage": stage,
+            "stage_reason": str(plan.get("stage_reason") or default["stage_reason"]).strip(),
+            "objective": str(
+                plan.get("objective") or _DEFAULT_STAGE_OBJECTIVES.get(stage) or default["objective"]
+            ).strip(),
+            "tone": str(plan.get("tone") or default["tone"]).strip(),
+            "soft_closing_strategy": str(
+                plan.get("soft_closing_strategy") or default["soft_closing_strategy"]
+            ).strip(),
+            "persuasion": {
+                "story": str(persuasion.get("story") or default["persuasion"]["story"]).strip(),
+                "benefit": str(persuasion.get("benefit") or default["persuasion"]["benefit"]).strip(),
+                "gentle_cta": str(
+                    persuasion.get("gentle_cta") or default["persuasion"]["gentle_cta"]
+                ).strip(),
+            },
+            "ask_follow_up": ask_follow_up,
+            "follow_up_question": follow_up_question,
+            "must_include": self._normalize_list(plan.get("must_include"), fallback=default["must_include"]),
+            "must_avoid": self._normalize_list(plan.get("must_avoid"), fallback=default["must_avoid"]),
+            "agent_priorities": self._normalize_list(
+                plan.get("agent_priorities"), fallback=default["agent_priorities"]
+            ),
+        }
+
+    @staticmethod
+    def _planning_config() -> GenerateConfig:
+        return GenerateConfig(temperature=0.15, max_tokens=560)
+
+    @staticmethod
+    def _draft_config(stage: str) -> GenerateConfig:
+        temp = 0.45
+        if stage in {"promo", "closing"}:
+            temp = 0.35
+        if stage in {"greeting", "opening"}:
+            temp = 0.4
+        return GenerateConfig(temperature=temp)
+
+    def _plan_orchestration_with_llm(
+        self,
+        input_text: str,
+        history: list[dict] | None = None,
+        context: dict | None = None,
+    ) -> tuple[dict, dict]:
+        history_text = self._format_history_for_planner(history)
+        context = context or {}
+        memory_summary = str(context.get("memory_summary") or "")[:700]
+        database_context = str(context.get("database_context") or "")[:900]
+        vector_context = str(context.get("vector_context") or "")[:900]
+
+        planner_user_prompt = (
+            f"Pesan user terbaru:\n{input_text}\n\n"
+            f"Riwayat ringkas:\n{history_text}\n\n"
+            f"Memory summary:\n{memory_summary or '(none)'}\n\n"
+            f"Database context:\n{database_context or '(none)'}\n\n"
+            f"Vector context:\n{vector_context or '(none)'}\n\n"
+            "Buat rencana untuk satu bubble jawaban berikutnya."
+        )
+        messages = [
+            {"role": "system", "content": _PLANNER_SYSTEM_PROMPT},
+            {"role": "user", "content": planner_user_prompt},
+        ]
+        prompt_text = "\n".join(str(item.get("content", "")) for item in messages)
+
+        try:
+            response = self.llm.generate(messages=messages, config=self._planning_config())
+            raw_text = self._strip_think_tags(response.text)
+            plan = self._normalize_plan(self._extract_json_object(raw_text))
+            usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=raw_text)
+            return plan, usage
+        except Exception:
+            fallback = self._default_plan()
+            usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=json.dumps(fallback))
+            return fallback, usage
+
+    def _run_subagents(
+        self,
+        input_text: str,
+        history: list[dict] | None,
+        plan: dict,
+        context: dict | None = None,
+    ) -> tuple[list[SubAgentResult], dict]:
+        notes: list[SubAgentResult] = []
+        usages: list[dict] = []
+        history_text = self._format_history_for_planner(history)
+
+        for subagent in (self.empathy_agent, self.product_agent, self.consultation_agent):
+            note = subagent.run(
+                input_text=input_text,
+                history_text=history_text,
+                plan=plan,
+                previous_notes=notes,
+                context=context,
+            )
+            notes.append(note)
+            usages.append(note.usage)
+
+        return notes, self._merge_usage(*usages)
+
+    def _build_stage_block(self, plan: dict, notes: list[SubAgentResult]) -> str:
+        stage = str(plan.get("stage") or "consultation")
+        persuasion = plan.get("persuasion", {})
         lines = [
             f"TAHAP_AKTIF={stage}",
-            f"ATURAN_TAHAP={guidance}",
-            "FORMAT=Maksimal 2-3 kalimat, bahasa santai kayak chat temen.",
-            "GAYA=Ngobrol natural. Boleh tutup dengan pertanyaan lanjutan TAPI jangan ajak beli kecuali di tahap promo/closing.",
+            f"PANDUAN_TAHAP={_STAGE_COMPACT_GUIDANCE.get(stage, _STAGE_COMPACT_GUIDANCE['consultation'])}",
+            f"TUJUAN_BUBBLE={plan.get('objective', '')}",
+            f"GAYA_DETAIL={plan.get('tone', '')}",
+            f"SOFT_CLOSING={plan.get('soft_closing_strategy', '')}",
+            f"STORY_FOCUS={persuasion.get('story', '')}",
+            f"BENEFIT_FOCUS={persuasion.get('benefit', '')}",
+            f"GENTLE_CTA={persuasion.get('gentle_cta', '')}",
+            (
+                "FOLLOW_UP_POLICY="
+                f"ask={str(bool(plan.get('ask_follow_up', False))).lower()}, "
+                f"question={str(plan.get('follow_up_question', '')).strip()}"
+            ),
+            "FORMAT=2-4 kalimat natural, tidak terdengar template bot.",
         ]
+        if plan.get("must_include"):
+            lines.append("MUST_INCLUDE:")
+            lines.extend(f"- {item}" for item in plan.get("must_include", []))
+        if plan.get("must_avoid"):
+            lines.append("MUST_AVOID:")
+            lines.extend(f"- {item}" for item in plan.get("must_avoid", []))
 
-        if stage == "testimony":
-            message = input_text.lower()
-            ask_for_many = any(token in message for token in {"dua", "2", "lebih banyak", "lainnya", "lagi"})
-            selected_quotes = _TESTIMONIAL_QUOTES[:2] if ask_for_many else _TESTIMONIAL_QUOTES[:1]
-            lines.append("TESTIMONI_VERBATIM:")
-            lines.extend(f"- {quote}" for quote in selected_quotes)
-
+        notes_text = render_notes_for_prompt(notes)
+        if notes_text:
+            lines.append("CATATAN_SUBAGENT:")
+            lines.append(notes_text)
         return "\n".join(lines)
-
-    @staticmethod
-    def _generation_config_for_stage(stage: str) -> GenerateConfig:
-        return GenerateConfig(
-            temperature=0.45,
-        )
 
     def _build_messages(
         self,
         input_text: str,
-        stage: str,
-        history: list[dict] | None = None,
+        history: list[dict] | None,
+        plan: dict,
+        notes: list[SubAgentResult],
         context: dict | None = None,
     ) -> list[dict[str, str]]:
         context = context or {}
+        stage = str(plan.get("stage") or "consultation")
         memory_summary = context.get("memory_summary")
         database_context = context.get("database_context")
         vector_context = context.get("vector_context")
 
-        stage_block = self._build_compact_stage_block(stage=stage, input_text=input_text)
         sales_prompt_template = resolve_prompt("sales_system") or ""
         sales_prompt = ""
         if sales_prompt_template:
@@ -630,23 +490,19 @@ class PlannerAgent(BaseAgent):
                     stage=stage,
                     stage_instruction=_STAGE_COMPACT_GUIDANCE.get(stage, ""),
                 )
-                # Admin prompt override can be very long; clamp to keep token budget healthy.
-                sales_prompt = " ".join(str(sales_prompt).split())[:500]
+                sales_prompt = " ".join(str(sales_prompt).split())[:700]
             except Exception:
                 sales_prompt = ""
 
-        if stage in _KNOWLEDGE_BRIEF_STAGES:
-            product_block = PRODUCT_KNOWLEDGE_BRIEF
-        else:
-            product_block = PRODUCT_KNOWLEDGE_FULL
+        stage_block = self._build_stage_block(plan, notes)
+        product_block = PRODUCT_KNOWLEDGE_BRIEF if stage in _KNOWLEDGE_BRIEF_STAGES else PRODUCT_KNOWLEDGE_FULL
 
-        parts = [BASE_SYSTEM_PROMPT]
+        system_parts = [BASE_SYSTEM_PROMPT]
         if sales_prompt:
-            parts.append(sales_prompt)
-        parts.append(stage_block)
-        if product_block:
-            parts.append(product_block)
-        system_prompt = "\n\n".join(parts)
+            system_parts.append(sales_prompt)
+        system_parts.append(stage_block)
+        system_parts.append(product_block)
+        system_prompt = "\n\n".join(system_parts)
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
@@ -654,23 +510,21 @@ class PlannerAgent(BaseAgent):
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Ringkasan user sebelumnya:\n{str(memory_summary)[:500]}",
+                    "content": f"Ringkasan user sebelumnya:\n{str(memory_summary)[:700]}",
                 }
             )
-
         if database_context:
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Konteks database relevan:\n{str(database_context)[:700]}",
+                    "content": f"Konteks database relevan:\n{str(database_context)[:900]}",
                 }
             )
-
         if vector_context:
             messages.append(
                 {
                     "role": "system",
-                    "content": f"Konteks retrieval relevan:\n{str(vector_context)[:700]}",
+                    "content": f"Konteks retrieval relevan:\n{str(vector_context)[:900]}",
                 }
             )
 
@@ -678,7 +532,80 @@ class PlannerAgent(BaseAgent):
         messages.append({"role": "user", "content": input_text})
         return messages
 
-    # -- Execute (blocking) -----------------------------------------------
+    def _generate_draft(
+        self,
+        input_text: str,
+        history: list[dict] | None,
+        plan: dict,
+        notes: list[SubAgentResult],
+        context: dict | None = None,
+    ) -> tuple[str, dict]:
+        stage = str(plan.get("stage") or "consultation")
+        messages = self._build_messages(
+            input_text=input_text,
+            history=history,
+            plan=plan,
+            notes=notes,
+            context=context,
+        )
+        prompt_text = "\n".join(str(item.get("content", "")) for item in messages)
+
+        try:
+            response = self.llm.generate(
+                messages=messages,
+                config=self._draft_config(stage),
+            )
+            output_text = self._strip_think_tags(response.text)
+            usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=output_text)
+            if output_text:
+                return output_text, usage
+        except Exception:
+            pass
+
+        fallback = "Makasih udah cerita. Biar aku bantu paling pas, boleh aku tahu kondisi kulitmu sekarang lagi cenderung berminyak banget atau ada jerawat meradang?"
+        usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=fallback)
+        return fallback, usage
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int = 70) -> list[str]:
+        clean = str(text or "")
+        if not clean:
+            return []
+        return [clean[idx : idx + chunk_size] for idx in range(0, len(clean), chunk_size)]
+
+    def _build_metadata(
+        self,
+        plan: dict,
+        notes: list[SubAgentResult],
+        reflection,
+        usage: dict,
+    ) -> dict:
+        provider, model = self._resolve_llm_identity()
+        return {
+            "agent": "sales",
+            "stage": plan.get("stage", "consultation"),
+            "orchestration": {
+                "objective": plan.get("objective", ""),
+                "tone": plan.get("tone", ""),
+                "soft_closing_strategy": plan.get("soft_closing_strategy", ""),
+                "stage_reason": plan.get("stage_reason", ""),
+            },
+            "subagents": [
+                {
+                    "agent": note.agent,
+                    "summary": note.summary,
+                    "must_include": note.must_include,
+                    "must_avoid": note.must_avoid,
+                }
+                for note in notes
+            ],
+            "reflection": {
+                "approved": bool(getattr(reflection, "approved", True)),
+                "critique": list(getattr(reflection, "critique", []) or []),
+            },
+            "model": {"provider": provider, "name": model},
+            "usage": usage,
+        }
 
     def execute(
         self,
@@ -686,39 +613,37 @@ class PlannerAgent(BaseAgent):
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> AgentResult:
-        stage, _state = self._analyze_conversation(input_text, history=history)
-        messages = self._build_messages(
+        plan, planning_usage = self._plan_orchestration_with_llm(
             input_text=input_text,
-            stage=stage,
             history=history,
             context=context,
         )
-
-        response = self.llm.generate(
-            messages=messages,
-            config=self._generation_config_for_stage(stage),
+        notes, subagent_usage = self._run_subagents(
+            input_text=input_text,
+            history=history,
+            plan=plan,
+            context=context,
         )
-
-        output_text = self._strip_think_tags(response.text)
-        prompt_text = "\n".join(str(m.get("content", "")) for m in messages)
-        usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=output_text)
-
-        provider, model = self._resolve_llm_identity()
-
-        return AgentResult(
-            output=output_text,
-            metadata={
-                "agent": "sales",
-                "stage": stage,
-                "model": {
-                    "provider": provider,
-                    "name": model,
-                },
-                "usage": usage,
-            },
+        draft_output, draft_usage = self._generate_draft(
+            input_text=input_text,
+            history=history,
+            plan=plan,
+            notes=notes,
+            context=context,
         )
+        history_text = self._format_history_for_planner(history)
+        reflection = self.reflection_agent.review(
+            input_text=input_text,
+            history_text=history_text,
+            plan=plan,
+            notes=notes,
+            draft_response=draft_output,
+        )
+        final_output = (reflection.revised_response or draft_output).strip() or draft_output
+        usage = self._merge_usage(planning_usage, subagent_usage, draft_usage, reflection.usage)
+        metadata = self._build_metadata(plan=plan, notes=notes, reflection=reflection, usage=usage)
 
-    # -- Execute Stream (true streaming) ----------------------------------
+        return AgentResult(output=final_output, metadata=metadata)
 
     def execute_stream(
         self,
@@ -726,63 +651,82 @@ class PlannerAgent(BaseAgent):
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> Generator[dict, None, None]:
-        stage, _state = self._analyze_conversation(input_text, history=history)
-        messages = self._build_messages(
-            input_text=input_text,
-            stage=stage,
-            history=history,
-            context=context,
-        )
-
-        yield {"type": "thinking", "content": f"Tahap percakapan: {stage}\n"}
-
-        think_filter = ThinkFilter()
-        full_output = []
-        prompt_text = "\n".join(str(m.get("content", "")) for m in messages)
-        has_content = False
+        yield {"type": "thinking", "content": "Planner: menyusun strategi percakapan...\n"}
 
         try:
-            for token in self.llm.generate_stream(
-                messages=messages,
-                config=self._generation_config_for_stage(stage),
-            ):
-                filtered = think_filter.feed(token)
-                if filtered:
-                    has_content = True
-                    full_output.append(filtered)
-                    yield {"type": "content", "content": filtered}
-
-            # Flush any remaining buffer
-            remaining = think_filter.flush()
-            if remaining:
-                has_content = True
-                full_output.append(remaining)
-                yield {"type": "content", "content": remaining}
-
-        except Exception:
-            if not has_content:
-                yield {
-                    "type": "content",
-                    "content": "Maaf, belum ada jawaban. Bisa diulang dengan detail kebutuhan kamu?",
-                }
-
-        if not has_content:
+            plan, planning_usage = self._plan_orchestration_with_llm(
+                input_text=input_text,
+                history=history,
+                context=context,
+            )
+            stage = plan.get("stage", "consultation")
             yield {
-                "type": "content",
-                "content": "Maaf, belum ada jawaban. Bisa diulang dengan detail kebutuhan kamu?",
+                "type": "thinking",
+                "content": (
+                    f"Planner stage: {stage}\n"
+                    f"Objective: {plan.get('objective', '')}\n"
+                ),
             }
 
-        output_text = "".join(full_output)
-        usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=output_text)
-        provider, model = self._resolve_llm_identity()
+            history_text = self._format_history_for_planner(history)
+            notes: list[SubAgentResult] = []
+            subagent_usages: list[dict] = []
 
-        yield {
-            "type": "meta",
-            "metadata": {
-                "agent": "sales",
-                "stage": stage,
-                "model": {"provider": provider, "name": model},
-                "usage": usage,
-            },
-        }
+            for subagent in (self.empathy_agent, self.product_agent, self.consultation_agent):
+                note = subagent.run(
+                    input_text=input_text,
+                    history_text=history_text,
+                    plan=plan,
+                    previous_notes=notes,
+                    context=context,
+                )
+                notes.append(note)
+                subagent_usages.append(note.usage)
+                yield {
+                    "type": "thinking",
+                    "content": (
+                        f"Subagent {note.agent}: {note.summary}\n"
+                    ),
+                }
 
+            draft_output, draft_usage = self._generate_draft(
+                input_text=input_text,
+                history=history,
+                plan=plan,
+                notes=notes,
+                context=context,
+            )
+            yield {"type": "thinking", "content": "Reflection: mengecek kualitas jawaban final...\n"}
+
+            reflection = self.reflection_agent.review(
+                input_text=input_text,
+                history_text=history_text,
+                plan=plan,
+                notes=notes,
+                draft_response=draft_output,
+            )
+            final_output = (reflection.revised_response or draft_output).strip() or draft_output
+            usage = self._merge_usage(
+                planning_usage,
+                self._merge_usage(*subagent_usages),
+                draft_usage,
+                reflection.usage,
+            )
+            metadata = self._build_metadata(plan=plan, notes=notes, reflection=reflection, usage=usage)
+
+            for chunk in self._chunk_text(final_output):
+                yield {"type": "content", "content": chunk}
+
+            yield {"type": "meta", "metadata": metadata}
+            return
+        except Exception:
+            fallback = "Maaf, bisa cerita ulang sedikit masalah kulitmu biar aku bantu lebih tepat?"
+            usage = self._normalize_usage({}, prompt_text=input_text, output_text=fallback)
+            metadata = self._build_metadata(
+                plan=self._default_plan(),
+                notes=[],
+                reflection=type("ReflectionFallback", (), {"approved": True, "critique": []})(),
+                usage=usage,
+            )
+            yield {"type": "content", "content": fallback}
+            yield {"type": "meta", "metadata": metadata}

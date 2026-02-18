@@ -92,51 +92,10 @@ def _is_agent_enabled(agent_key: str, default: bool = True) -> bool:
     return str(value).strip().lower() not in _FALSE_VALUES
 
 
-_KNOWLEDGE_SKIP_STAGES = {
-    "greeting",
-    "opening",
-    "testimony",
-    "promo",
-    "closing",
-    "farewell",
-}
-
-_KNOWLEDGE_NEEDLE_KEYWORDS = {
-    "kandungan",
-    "ingredient",
-    "komposisi",
-    "bha",
-    "sulphur",
-    "bpom",
-    "halal",
-    "exp",
-    "cara pakai",
-    "pakainya",
-    "bahan",
-    "fungsi",
-}
-
-
-def _detect_stage_for_context(message: str, history: list[dict]) -> str:
-    """Lightweight stage detection to decide whether to call knowledge agents."""
-    from app.agents.planner.agent import PlannerAgent
-    intent = PlannerAgent._detect_intent(message)
-    state = PlannerAgent._build_state(history)
-    return PlannerAgent._resolve_stage(intent, state)
-
-
 def _collect_knowledge_context(
     question: str, history: list[dict] | None = None,
 ) -> dict[str, str]:
     context: dict[str, str] = {}
-
-    # Skip expensive agent calls except when consultation really needs extra facts.
-    stage = _detect_stage_for_context(question, history or [])
-    if stage in _KNOWLEDGE_SKIP_STAGES:
-        return context
-    lowered = (question or "").lower()
-    if not any(keyword in lowered for keyword in _KNOWLEDGE_NEEDLE_KEYWORDS):
-        return context
 
     if _is_agent_enabled("database", default=True):
         try:

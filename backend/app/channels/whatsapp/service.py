@@ -140,7 +140,7 @@ def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: s
         return True
 
     lowered = (user_text or "").lower()
-    if any(token in lowered for token in {"testimoni", "review", "bukti", "real"}):
+    if any(token in lowered for token in {"testimoni", "review", "bukti"}):
         return True
 
     return looks_like_testimony_reply(assistant_text)

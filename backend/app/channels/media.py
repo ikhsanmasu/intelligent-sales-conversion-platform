@@ -33,10 +33,8 @@ TESTIMONY_IMAGES: list[ChannelImage] = [TESTIMONY_AMANDA, TESTIMONY_SILMI]
 _TESTIMONY_SIGNAL_TOKENS = {
     "@amandabilla",
     "@silmisyauz",
-    "testimoni",
-    "review",
-    "pengguna",
-    "real",
+    "amandabilla98",
+    "silmisyauz",
 }
 
 
