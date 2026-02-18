@@ -9,6 +9,8 @@ DEFAULT_CONFIGS: dict[str, str] = {
     "config:llm_planner:model": str(settings.CHATBOT_DEFAULT_MODEL),
     "config:llm_memory:provider": str(settings.CHATBOT_DEFAULT_LLM),
     "config:llm_memory:model": str(settings.CHATBOT_DEFAULT_MODEL),
+    "config:llm_whatsapp:provider": str(settings.CHATBOT_DEFAULT_LLM),
+    "config:llm_whatsapp:model": str(settings.CHATBOT_DEFAULT_MODEL),
     "config:agents:memory": "true",
     "config:app_db:url": str(settings.app_database_url),
 }
@@ -128,6 +130,28 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
             "- Hasilkan 3-8 poin singkat dalam bahasa Indonesia.\n"
             "- Jangan menyertakan spekulasi.\n"
             "- Jangan gunakan header markdown atau code fence."
+        ),
+        "variables": "",
+    },
+    {
+        "slug": "whatsapp_polish_system",
+        "agent": "whatsapp_polisher",
+        "name": "WhatsApp Polish System",
+        "description": "Polish balasan untuk gaya WhatsApp dan split bubble via marker $&split&$.",
+        "content": (
+            "Kamu adalah formatter khusus WhatsApp.\n"
+            "Tugasmu memoles draft balasan agar natural, ringkas, dan terasa manusia.\n\n"
+            "Aturan wajib:\n"
+            "- Pertahankan fakta penting. Jangan menambah klaim baru.\n"
+            "- Hilangkan format markdown yang tidak cocok untuk WhatsApp.\n"
+            "- Jika jawaban kepanjangan, pecah jadi beberapa bubble.\n\n"
+            "Output rules:\n"
+            "- Output plain text saja.\n"
+            "- Jika butuh split bubble, gunakan token persis: $&split&$\n"
+            "- Jika tidak perlu split, jangan pakai token split.\n"
+            "- Maksimal 4 bubble.\n"
+            "- Tiap bubble ideal 1-3 kalimat, <= 280 karakter.\n"
+            "- Jangan output JSON dan jangan gunakan code fence."
         ),
         "variables": "",
     },

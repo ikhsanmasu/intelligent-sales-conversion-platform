@@ -4,16 +4,19 @@ import time
 
 import httpx
 
+from app.agents.whatsapp import create_whatsapp_polisher_agent
 from app.channels.common import natural_read_delay, process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
     format_whatsapp_reply_text,
     get_testimony_images,
     looks_like_testimony_reply,
+    split_whatsapp_bubbles,
 )
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+_whatsapp_polisher_agent = None
 
 
 def _get_whatsapp_api_context() -> tuple[str, str, str] | None:
@@ -159,6 +162,62 @@ def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: s
     return looks_like_testimony_reply(assistant_text)
 
 
+def _get_whatsapp_polisher():
+    global _whatsapp_polisher_agent
+    if _whatsapp_polisher_agent is None:
+        _whatsapp_polisher_agent = create_whatsapp_polisher_agent()
+    return _whatsapp_polisher_agent
+
+
+def _build_whatsapp_bubbles(user_text: str, assistant_text: str, stage: str) -> list[str]:
+    draft = format_whatsapp_reply_text(assistant_text)
+    if not draft:
+        return []
+
+    try:
+        polisher = _get_whatsapp_polisher()
+        polished = polisher.execute(
+            draft,
+            context={"user_text": user_text, "stage": stage},
+        )
+        bubbles = polished.metadata.get("bubbles") if isinstance(polished.metadata, dict) else None
+        if isinstance(bubbles, list) and bubbles:
+            cleaned = [format_whatsapp_reply_text(item) for item in bubbles if str(item or "").strip()]
+            if cleaned:
+                return cleaned
+
+        return split_whatsapp_bubbles(polished.output or draft)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("WhatsApp polisher unavailable, fallback to heuristic split: %s", exc)
+        return split_whatsapp_bubbles(draft)
+
+
+def _outbound_bubble_delay(text: str, first: bool) -> float:
+    base = natural_read_delay(text)
+    delay = min(2.4, max(0.45, base * 0.45))
+    if not first:
+        delay = min(1.8, max(0.3, delay * 0.8))
+    return delay
+
+
+def _send_whatsapp_bubbles(recipient: str, bubbles: list[str], inbound_message_id: str) -> None:
+    for index, bubble in enumerate(bubbles):
+        body = str(bubble or "").strip()
+        if not body:
+            continue
+
+        try:
+            _send_whatsapp_typing_indicator(inbound_message_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to send typing indicator before WhatsApp bubble: %s", exc)
+
+        time.sleep(_outbound_bubble_delay(body, first=index == 0))
+        try:
+            _send_whatsapp_message(recipient=recipient, text=body)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Failed to send WhatsApp bubble %d/%d: %s", index + 1, len(bubbles), exc)
+
+
 def handle_webhook(payload: dict) -> dict:
     processed_messages = 0
 
@@ -193,7 +252,7 @@ def handle_webhook(payload: dict) -> dict:
                 metadata = result.get("assistant_metadata") or {}
                 stage = str(metadata.get("stage") or "").strip().lower()
                 raw_reply_text = str(result.get("reply_text") or "").strip()
-                reply_text = format_whatsapp_reply_text(raw_reply_text)
+                final_text = format_whatsapp_reply_text(raw_reply_text)
 
                 if _should_attach_testimony_media(
                     stage=stage,
@@ -202,35 +261,71 @@ def handle_webhook(payload: dict) -> dict:
                 ) and raw_reply_text:
                     try:
                         base_url = (settings.PUBLIC_BASE_URL or "").strip()
+                        if not base_url:
+                            logger.error(
+                                "PUBLIC_BASE_URL is not set — WhatsApp testimony images skipped"
+                            )
                         images = get_testimony_images(base_url=base_url) if base_url else []
+                        logger.info(
+                            "Sending %d testimony image(s) to %s (base_url=%r)",
+                            len(images),
+                            sender,
+                            base_url,
+                        )
                         for image in images:
+                            logger.info("Sending WhatsApp image: %s", image.image_url)
                             try:
                                 _send_whatsapp_image(
                                     recipient=sender,
                                     image_url=image.image_url,
                                     caption=image.title,
                                 )
+                                logger.info("Sent WhatsApp image OK: %s", image.title)
                             except Exception as media_exc:  # noqa: BLE001
-                                logger.warning(
-                                    "Failed to send WhatsApp image %s: %s",
+                                logger.error(
+                                    "Failed to send WhatsApp image %r (url=%s): %s",
                                     image.title,
+                                    image.image_url,
                                     media_exc,
                                 )
 
-                        reply_text = format_whatsapp_reply_text(
+                        final_text = format_whatsapp_reply_text(
                             format_testimony_reply_text(raw_reply_text)
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Failed to send WhatsApp testimonial media: %s", exc)
-                        reply_text = format_whatsapp_reply_text(
+                        final_text = format_whatsapp_reply_text(
                             format_testimony_reply_text(raw_reply_text)
                         )
 
-                if reply_text:
+                bubbles: list[str] = []
+                if final_text:
                     try:
-                        _send_whatsapp_message(recipient=sender, text=reply_text)
+                        with _WhatsAppTypingHeartbeat(
+                            message_id=inbound_message_id,
+                            interval_seconds=4.0,
+                            minimum_visible_seconds=0.6,
+                        ):
+                            bubbles = _build_whatsapp_bubbles(
+                                user_text=body,
+                                assistant_text=final_text,
+                                stage=stage,
+                            )
                     except Exception as exc:  # noqa: BLE001
-                        logger.exception("Failed to send WhatsApp reply: %s", exc)
+                        logger.warning("Failed to prepare WhatsApp bubbles: %s", exc)
+                        bubbles = split_whatsapp_bubbles(final_text)
+                    if not bubbles:
+                        bubbles = split_whatsapp_bubbles(final_text)
+
+                if bubbles:
+                    try:
+                        _send_whatsapp_bubbles(
+                            recipient=sender,
+                            bubbles=bubbles,
+                            inbound_message_id=inbound_message_id,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception("Failed to send WhatsApp bubble replies: %s", exc)
 
                 processed_messages += 1
 

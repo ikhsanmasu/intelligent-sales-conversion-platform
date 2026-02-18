@@ -37,6 +37,11 @@ _TESTIMONY_SIGNAL_TOKENS = {
     "silmisyauz",
 }
 
+WHATSAPP_SPLIT_MARKER = "$&split&$"
+_WHATSAPP_MAX_BUBBLE_CHARS = 420
+_WHATSAPP_TARGET_BUBBLE_CHARS = 260
+_WHATSAPP_MAX_BUBBLES = 6
+
 
 def _absolute_url(relative_path: str, base_url: str) -> str:
     """Turn a relative static path into an absolute URL."""
@@ -64,6 +69,142 @@ def looks_like_testimony_reply(text: str) -> bool:
     if not lowered:
         return False
     return any(token in lowered for token in _TESTIMONY_SIGNAL_TOKENS)
+
+
+def _hard_wrap_text(text: str, max_chars: int, target_chars: int) -> list[str]:
+    content = str(text or "").strip()
+    if not content:
+        return []
+
+    parts: list[str] = []
+    while len(content) > max_chars:
+        split_at = content.rfind(" ", 0, target_chars)
+        if split_at < max(10, int(target_chars * 0.45)):
+            split_at = content.rfind(" ", 0, max_chars)
+        if split_at <= 0:
+            split_at = max_chars
+
+        head = content[:split_at].strip()
+        if head:
+            parts.append(head)
+        content = content[split_at:].strip()
+
+    if content:
+        parts.append(content)
+    return parts
+
+
+def _pack_units(units: list[str], max_chars: int, target_chars: int, separator: str) -> list[str]:
+    packed: list[str] = []
+    current = ""
+    for unit in units:
+        token = str(unit or "").strip()
+        if not token:
+            continue
+        if len(token) > max_chars:
+            if current:
+                packed.append(current)
+                current = ""
+            packed.extend(_hard_wrap_text(token, max_chars=max_chars, target_chars=target_chars))
+            continue
+
+        if not current:
+            current = token
+            continue
+
+        candidate = f"{current}{separator}{token}"
+        if len(candidate) <= target_chars:
+            current = candidate
+        else:
+            packed.append(current)
+            current = token
+
+    if current:
+        packed.append(current)
+    return packed
+
+
+def _split_large_block(block: str, max_chars: int, target_chars: int) -> list[str]:
+    text = str(block or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    # Keep bullet-like lines grouped first.
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > 1 and all(len(line) <= max_chars for line in lines):
+        return _pack_units(lines, max_chars=max_chars, target_chars=target_chars, separator="\n")
+
+    # Fallback to sentence-aware packing.
+    sentences = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", text) if segment.strip()]
+    if len(sentences) > 1:
+        return _pack_units(sentences, max_chars=max_chars, target_chars=target_chars, separator=" ")
+
+    return _hard_wrap_text(text, max_chars=max_chars, target_chars=target_chars)
+
+
+def split_whatsapp_bubbles(
+    text: str,
+    split_marker: str = WHATSAPP_SPLIT_MARKER,
+    max_chars: int = _WHATSAPP_MAX_BUBBLE_CHARS,
+    target_chars: int = _WHATSAPP_TARGET_BUBBLE_CHARS,
+    max_bubbles: int = _WHATSAPP_MAX_BUBBLES,
+) -> list[str]:
+    """Split WhatsApp-ready text into bubble-sized chunks.
+
+    If marker exists, marker boundaries are respected first.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    marker_present = split_marker in raw
+    marked_parts = [part.strip() for part in raw.split(split_marker)]
+    marked_parts = [part for part in marked_parts if part]
+    if not marked_parts:
+        marked_parts = [raw]
+
+    bubbles: list[str] = []
+    if marker_present:
+        # Keep explicit marker boundaries intact.
+        for part in marked_parts:
+            paragraphs = [p.strip() for p in re.split(r"\n{2,}", part) if p.strip()]
+            local = _pack_units(
+                paragraphs or [part],
+                max_chars=max_chars,
+                target_chars=target_chars,
+                separator="\n\n",
+            )
+            bubbles.extend(local)
+    else:
+        expanded: list[str] = []
+        for part in marked_parts:
+            paragraphs = [p.strip() for p in re.split(r"\n{2,}", part) if p.strip()]
+            if not paragraphs:
+                continue
+            expanded.extend(paragraphs)
+
+        bubbles = _pack_units(
+            expanded or marked_parts,
+            max_chars=max_chars,
+            target_chars=target_chars,
+            separator="\n\n",
+        )
+
+    normalized: list[str] = []
+    for bubble in bubbles:
+        normalized.extend(_split_large_block(bubble, max_chars=max_chars, target_chars=target_chars))
+
+    normalized = [item.strip() for item in normalized if item and item.strip()]
+    if len(normalized) <= max_bubbles:
+        return normalized
+
+    head = normalized[: max_bubbles - 1]
+    tail = "\n\n".join(normalized[max_bubbles - 1 :])
+    tail_parts = _split_large_block(tail, max_chars=max_chars, target_chars=target_chars)
+    head.extend(tail_parts)
+    return [item for item in head[:max_bubbles] if item]
 
 
 def format_whatsapp_reply_text(base_text: str) -> str:
