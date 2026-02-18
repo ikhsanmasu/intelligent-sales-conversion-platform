@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Generator
 
 from app.agents.database import create_database_agent
@@ -14,6 +15,57 @@ from app.modules.chatbot.schemas import ChatRequest, ChatResponse
 
 
 _FALSE_VALUES = {"0", "false", "off", "no", "disabled"}
+_KNOWN_CHANNELS = {"telegram", "whatsapp", "web"}
+
+_READY_TO_BUY_PATTERNS = (
+    r"\bmau (?:langsung )?(?:beli|checkout|co|order|pesan)\b",
+    r"\bjadi (?:beli|checkout|co|order)\b",
+    r"\blanjut (?:checkout|order|beli)\b",
+)
+_READY_TO_BUY_KEYWORDS = {
+    "checkout",
+    "order sekarang",
+    "pesan sekarang",
+}
+_NOT_INTERESTED_KEYWORDS = {
+    "ga jadi",
+    "gak jadi",
+    "tidak jadi",
+    "nanti dulu",
+    "belum dulu",
+    "ga dulu",
+    "gak dulu",
+    "skip dulu",
+    "tidak tertarik",
+}
+_CONSIDERING_KEYWORDS = {
+    "harga",
+    "berapa",
+    "promo",
+    "diskon",
+    "ongkir",
+    "testimoni",
+    "review",
+    "cocok gak",
+    "aman gak",
+}
+_NEEDS_INFO_KEYWORDS = {
+    "jerawat",
+    "berminyak",
+    "bruntusan",
+    "komedo",
+    "sensitif",
+    "cara pakai",
+    "kandungan",
+    "bpom",
+    "halal",
+}
+_TOPIC_KEYWORDS = {
+    "skin concern": {"jerawat", "berminyak", "bruntusan", "komedo", "sensitif"},
+    "price": {"harga", "promo", "diskon", "ongkir", "murah", "mahal"},
+    "testimony": {"testimoni", "review", "bukti"},
+    "usage": {"cara pakai", "pemakaian", "pakai", "gunakan"},
+}
 
 
 def _maybe_append_testimony_images(text: str, stage: str) -> str:
@@ -287,3 +339,166 @@ def clear_history(user_id: str, conversation_id: str | None = None) -> int:
         user_id=user_id,
         conversation_id=conversation_id,
     )
+
+
+def _extract_channel_identity(user_id: str) -> tuple[str, str]:
+    raw = str(user_id or "").strip()
+    if ":" not in raw:
+        if raw in _KNOWN_CHANNELS:
+            return raw, ""
+        return "web", raw
+
+    channel, external_user_id = raw.split(":", 1)
+    channel = channel.strip().lower() or "web"
+    external_user_id = external_user_id.strip()
+    if channel not in _KNOWN_CHANNELS:
+        return "web", raw
+    return channel, external_user_id
+
+
+def _normalize_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _contains_keyword(text: str, keywords: set[str]) -> bool:
+    lowered = _normalize_for_match(text)
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _is_ready_to_buy(text: str) -> bool:
+    lowered = _normalize_for_match(text)
+    if any(re.search(pattern, lowered) for pattern in _READY_TO_BUY_PATTERNS):
+        return True
+    return any(keyword in lowered for keyword in _READY_TO_BUY_KEYWORDS)
+
+
+def _derive_lead_status(user_messages: list[str]) -> str:
+    joined = _normalize_for_match(" ".join(user_messages))
+    if not joined:
+        return "unknown"
+
+    if _contains_keyword(joined, _NOT_INTERESTED_KEYWORDS):
+        return "not_interested"
+    if _is_ready_to_buy(joined):
+        return "ready_to_buy"
+    if _contains_keyword(joined, _CONSIDERING_KEYWORDS):
+        return "considering"
+    if _contains_keyword(joined, _NEEDS_INFO_KEYWORDS):
+        return "needs_info"
+    return "unknown"
+
+
+def _build_topics_summary(user_messages: list[str]) -> str:
+    joined = _normalize_for_match(" ".join(user_messages))
+    topics = []
+    for topic, keywords in _TOPIC_KEYWORDS.items():
+        if any(keyword in joined for keyword in keywords):
+            topics.append(topic)
+    if not topics:
+        return "general inquiry"
+    return ", ".join(topics)
+
+
+def _shorten_text(text: str, max_chars: int = 140) -> str:
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= max_chars:
+        return clean
+    return clean[: max_chars - 3].rstrip() + "..."
+
+
+def _build_monitor_payload(conversation: dict) -> dict:
+    messages = list(conversation.get("messages") or [])
+    user_messages = [
+        str(item.get("content") or "")
+        for item in messages
+        if str(item.get("role") or "").strip().lower() == "user"
+    ]
+    assistant_messages = [
+        str(item.get("content") or "")
+        for item in messages
+        if str(item.get("role") or "").strip().lower() == "assistant"
+    ]
+
+    channel, external_user_id = _extract_channel_identity(conversation.get("user_id", ""))
+    lead_status = _derive_lead_status(user_messages)
+    topics_summary = _build_topics_summary(user_messages)
+    summary = (
+        f"Lead status: {lead_status.replace('_', ' ')}. "
+        f"Primary topics: {topics_summary}."
+    )
+
+    return {
+        "id": conversation["id"],
+        "user_id": conversation["user_id"],
+        "channel": channel,
+        "external_user_id": external_user_id,
+        "title": conversation["title"],
+        "created_at": float(conversation["created_at"]),
+        "updated_at": float(conversation["updated_at"]),
+        "message_count": len(messages),
+        "lead_status": lead_status,
+        "summary": summary,
+        "last_user_message": _shorten_text(user_messages[-1] if user_messages else ""),
+        "last_assistant_message": _shorten_text(
+            assistant_messages[-1] if assistant_messages else ""
+        ),
+        "messages": messages,
+    }
+
+
+def list_monitor_conversations(
+    limit: int = 50,
+    offset: int = 0,
+    channel: str | None = None,
+    lead_status: str | None = None,
+    query: str | None = None,
+) -> list[dict]:
+    safe_limit = max(1, min(limit, 200))
+    safe_offset = max(0, offset)
+    channel_filter = str(channel or "").strip().lower()
+    lead_filter = str(lead_status or "").strip().lower()
+    query_filter = _normalize_for_match(query or "")
+
+    repository = ChatRepository()
+    # Pull a wider window then filter in memory.
+    base_rows = repository.list_conversations_global(limit=500, offset=0)
+
+    monitored_rows = []
+    for row in base_rows:
+        detail = repository.get_conversation_by_id(row["id"])
+        if not detail:
+            continue
+        monitored = _build_monitor_payload(detail)
+
+        if channel_filter and channel_filter != "all" and monitored["channel"] != channel_filter:
+            continue
+        if lead_filter and lead_filter != "all" and monitored["lead_status"] != lead_filter:
+            continue
+        if query_filter:
+            haystack = _normalize_for_match(
+                " ".join(
+                    [
+                        monitored["title"],
+                        monitored["user_id"],
+                        monitored["external_user_id"],
+                        monitored["summary"],
+                        monitored["last_user_message"],
+                        monitored["last_assistant_message"],
+                    ]
+                )
+            )
+            if query_filter not in haystack:
+                continue
+
+        monitored_rows.append(monitored)
+
+    return monitored_rows[safe_offset : safe_offset + safe_limit]
+
+
+def get_monitor_conversation(conversation_id: str) -> dict | None:
+    repository = ChatRepository()
+    detail = repository.get_conversation_by_id(conversation_id)
+    if not detail:
+        return None
+    monitored = _build_monitor_payload(detail)
+    return monitored

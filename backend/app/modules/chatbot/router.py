@@ -8,6 +8,8 @@ from app.modules.chatbot.schemas import (
     ConversationSummary,
     CreateConversationRequest,
     HistoryEntry,
+    MonitorConversationDetail,
+    MonitorConversationSummary,
     SaveMessagesRequest,
     UpdateConversationTitleRequest,
 )
@@ -18,7 +20,9 @@ from app.modules.chatbot.service import (
     create_conversation,
     delete_conversation,
     get_conversation,
+    get_monitor_conversation,
     list_history,
+    list_monitor_conversations,
     list_conversations,
     save_messages,
     update_conversation_title,
@@ -107,3 +111,31 @@ async def list_history_endpoint(
 async def clear_history_endpoint(user_id: str, conversation_id: str | None = None):
     deleted_count = clear_history(user_id, conversation_id=conversation_id)
     return {"status": "deleted", "deleted_count": deleted_count}
+
+
+@router.get("/monitor/conversations", response_model=list[MonitorConversationSummary])
+async def monitor_conversations_endpoint(
+    limit: int = 50,
+    offset: int = 0,
+    channel: str | None = None,
+    lead_status: str | None = None,
+    query: str | None = None,
+):
+    return list_monitor_conversations(
+        limit=limit,
+        offset=offset,
+        channel=channel,
+        lead_status=lead_status,
+        query=query,
+    )
+
+
+@router.get(
+    "/monitor/conversations/{conversation_id}",
+    response_model=MonitorConversationDetail,
+)
+async def monitor_conversation_detail_endpoint(conversation_id: str):
+    detail = get_monitor_conversation(conversation_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return detail

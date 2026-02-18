@@ -26,6 +26,7 @@ class MessageSchema(BaseModel):
     role: str
     content: str
     thinking: Optional[str] = None
+    created_at: Optional[float] = None
 
 
 class ConversationSummary(BaseModel):
@@ -68,3 +69,34 @@ class HistoryEntry(BaseModel):
     assistant_content: str
     assistant_thinking: Optional[str] = None
     created_at: float
+
+
+class MonitorConversationSummary(BaseModel):
+    id: str
+    user_id: str
+    channel: str
+    external_user_id: str
+    title: str
+    created_at: float
+    updated_at: float
+    message_count: int
+    lead_status: str
+    summary: str
+    last_user_message: str = ""
+    last_assistant_message: str = ""
+
+
+class MonitorConversationDetail(BaseModel):
+    id: str
+    user_id: str
+    channel: str
+    external_user_id: str
+    title: str
+    created_at: float
+    updated_at: float
+    message_count: int
+    lead_status: str
+    summary: str
+    last_user_message: str = ""
+    last_assistant_message: str = ""
+    messages: list[MessageSchema] = Field(default_factory=list)

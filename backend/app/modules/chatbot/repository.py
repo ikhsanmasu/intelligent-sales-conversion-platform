@@ -64,6 +64,29 @@ class ChatRepository:
             ).all()
             return [self._conversation_to_dict(conv) for conv in conversations]
 
+    @staticmethod
+    def _conversation_detail_payload(
+        session: Session, conversation: Conversation
+    ) -> dict:
+        messages = session.exec(
+            select(ConversationMessage)
+            .where(ConversationMessage.conversation_id == conversation.id)
+            .order_by(ConversationMessage.created_at.asc(), ConversationMessage.id.asc())
+        ).all()
+
+        data = ChatRepository._conversation_to_dict(conversation)
+        data["messages"] = []
+        for message in messages:
+            payload = {
+                "role": message.role,
+                "content": message.content,
+                "created_at": float(message.created_at),
+            }
+            if message.thinking:
+                payload["thinking"] = message.thinking
+            data["messages"].append(payload)
+        return data
+
     def get_conversation(self, user_id: str, conversation_id: str) -> dict | None:
         with Session(self.engine) as session:
             conversation = session.exec(
@@ -74,20 +97,30 @@ class ChatRepository:
             if not conversation:
                 return None
 
-            messages = session.exec(
-                select(ConversationMessage)
-                .where(ConversationMessage.conversation_id == conversation_id)
-                .order_by(ConversationMessage.created_at.asc(), ConversationMessage.id.asc())
-            ).all()
+            return self._conversation_detail_payload(session, conversation)
 
-            data = self._conversation_to_dict(conversation)
-            data["messages"] = []
-            for message in messages:
-                payload = {"role": message.role, "content": message.content}
-                if message.thinking:
-                    payload["thinking"] = message.thinking
-                data["messages"].append(payload)
-            return data
+    def get_conversation_by_id(self, conversation_id: str) -> dict | None:
+        with Session(self.engine) as session:
+            conversation = session.exec(
+                select(Conversation).where(Conversation.id == conversation_id)
+            ).first()
+            if not conversation:
+                return None
+            return self._conversation_detail_payload(session, conversation)
+
+    def list_conversations_global(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict]:
+        with Session(self.engine) as session:
+            conversations = session.exec(
+                select(Conversation)
+                .order_by(Conversation.updated_at.desc(), Conversation.id.desc())
+                .offset(offset)
+                .limit(limit)
+            ).all()
+            return [self._conversation_to_dict(conv) for conv in conversations]
 
     def delete_conversation(self, user_id: str, conversation_id: str) -> bool:
         with Session(self.engine) as session:

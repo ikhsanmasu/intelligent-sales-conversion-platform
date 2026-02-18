@@ -13,6 +13,7 @@ export default function Sidebar({
 }) {
   const navItems = [
     { key: "chat", label: "Chats", icon: <ChatIcon /> },
+    { key: "conversations", label: "Conversations", icon: <ThreadsIcon /> },
     { key: "billing", label: "Billing", icon: <BillingIcon /> },
     { key: "config", label: "Config", icon: <ConfigIcon /> },
   ];
@@ -227,6 +228,27 @@ function BillingIcon() {
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function ThreadsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
+      <path
+        d="M5 6.5H15C16.1 6.5 17 7.4 17 8.5V13.5C17 14.6 16.1 15.5 15 15.5H9.2L6 18V15.5H5C3.9 15.5 3 14.6 3 13.5V8.5C3 7.4 3.9 6.5 5 6.5Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M9 3.5H19C20.1 3.5 21 4.4 21 5.5V10.5C21 11.6 20.1 12.5 19 12.5"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );

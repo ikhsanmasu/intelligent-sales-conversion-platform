@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import httpx
@@ -94,6 +95,46 @@ def _send_whatsapp_typing_indicator(message_id: str) -> bool:
     return True
 
 
+class _WhatsAppTypingHeartbeat:
+    """Keep WhatsApp typing indicator alive while response is being generated."""
+
+    def __init__(
+        self,
+        message_id: str,
+        interval_seconds: float = 20.0,
+        minimum_visible_seconds: float = 1.0,
+    ):
+        self._message_id = message_id
+        self._interval_seconds = interval_seconds
+        self._minimum_visible_seconds = minimum_visible_seconds
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._started_at = 0.0
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                _send_whatsapp_typing_indicator(self._message_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to send WhatsApp typing indicator: %s", exc)
+            if self._stop_event.wait(self._interval_seconds):
+                return
+
+    def __enter__(self):
+        self._started_at = time.monotonic()
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        elapsed = time.monotonic() - self._started_at
+        remaining = self._minimum_visible_seconds - elapsed
+        if remaining > 0:
+            time.sleep(remaining)
+        self._stop_event.set()
+        self._thread.join(timeout=2.0)
+        return False
+
+
 def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: str) -> bool:
     if stage == "testimony":
         return True
@@ -123,23 +164,13 @@ def handle_webhook(payload: dict) -> dict:
                 if not sender or not body:
                     continue
 
-                typing_sent = False
-                if inbound_message_id:
-                    try:
-                        typing_sent = _send_whatsapp_typing_indicator(message_id=inbound_message_id)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Failed to send WhatsApp typing indicator: %s", exc)
-
-                if typing_sent:
-                    # Give clients a brief window to render typing state.
-                    time.sleep(1.0)
-
-                result = process_incoming_text(
-                    channel="whatsapp",
-                    external_user_id=sender,
-                    text=body,
-                    conversation_title=f"WhatsApp {sender}",
-                )
+                with _WhatsAppTypingHeartbeat(message_id=inbound_message_id):
+                    result = process_incoming_text(
+                        channel="whatsapp",
+                        external_user_id=sender,
+                        text=body,
+                        conversation_title=f"WhatsApp {sender}",
+                    )
 
                 metadata = result.get("assistant_metadata") or {}
                 stage = str(metadata.get("stage") or "").strip().lower()

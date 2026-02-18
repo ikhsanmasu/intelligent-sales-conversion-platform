@@ -3,6 +3,7 @@ import Sidebar from "./components/Sidebar";
 import Playground from "./components/Playground";
 import ConfigPanel from "./components/ConfigPanel";
 import BillingPanel from "./components/BillingPanel";
+import ConversationsPanel from "./components/ConversationsPanel";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const USER_ID = "0";
@@ -187,6 +188,8 @@ export default function App() {
 
   const renderMainPanel = () => {
     switch (activeTab) {
+      case "conversations":
+        return <ConversationsPanel />;
       case "config":
         return <ConfigPanel />;
       case "billing":

@@ -255,7 +255,7 @@ export default function Playground({
           <div className="empty-logo">
             <EmptyStateLogo />
           </div>
-          <h1>How can I help you today?</h1>
+          <h1>Halo, ada yang bisa saya bantu?</h1>
           <p>Ceritain masalah kulitmu, nanti aku bantu cari solusi yang cocok.</p>
           <div className="home-composer">
             <textarea
