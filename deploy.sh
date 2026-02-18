@@ -3,6 +3,7 @@
 # Source this file on server:
 #   source deploy.sh
 # Then run:
+#   deploy_choose
 #   deploy_keep_volumes
 #   deploy_reset_volumes
 #
@@ -19,6 +20,8 @@ deploy_help() {
 Deploy helpers loaded.
 
 Commands:
+  deploy_choose [compose_file] [project_name]
+    - Mode interaktif pilih A/B (keep/wipe).
   deploy_keep_volumes [compose_file] [project_name]
     - Recreate services without deleting volumes.
   deploy_reset_volumes [compose_file] [project_name]
@@ -103,7 +106,7 @@ _deploy_select_mode_interactive() {
   local choice=""
 
   while true; do
-    cat <<'EOF'
+    cat >&2 <<'EOF'
 [deploy] Pilih mode deploy:
   A) Keep volumes   (aman, data tetap ada)
   B) Wipe volumes   (hapus volume, data fresh)
@@ -126,6 +129,25 @@ EOF
         ;;
     esac
   done
+}
+
+deploy_choose() {
+  local mode=""
+  mode="$(_deploy_select_mode_interactive)" || return 1
+  case "${mode,,}" in
+    keep)
+      echo "[deploy] Mode KEEP: container di-recreate tanpa menghapus volume."
+      deploy_keep_volumes "${1:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${2:-$DEPLOY_PROJECT_NAME_DEFAULT}"
+      ;;
+    wipe)
+      echo "[deploy] Mode WIPE: container di-recreate dan volume dihapus dulu."
+      deploy_reset_volumes "${1:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${2:-$DEPLOY_PROJECT_NAME_DEFAULT}"
+      ;;
+    *)
+      echo "[deploy] mode interaktif tidak valid: $mode" >&2
+      return 1
+      ;;
+  esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
