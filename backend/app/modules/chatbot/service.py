@@ -96,6 +96,22 @@ def _collect_knowledge_context(
     question: str, history: list[dict] | None = None,
 ) -> dict[str, str]:
     context: dict[str, str] = {}
+    normalized = _normalize_for_match(question)
+    short_greetings = {
+        "halo",
+        "hai",
+        "hi",
+        "hello",
+        "pagi",
+        "siang",
+        "sore",
+        "malam",
+        "permisi",
+    }
+    if normalized in short_greetings or (
+        len(normalized.split()) <= 2 and normalized in {"halo kak", "hai kak"}
+    ):
+        return context
 
     if _is_agent_enabled("database", default=True):
         try:

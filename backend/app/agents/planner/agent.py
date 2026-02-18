@@ -116,21 +116,25 @@ _STAGE_COMPACT_GUIDANCE = {
 }
 
 _PLANNER_SYSTEM_PROMPT = """Kamu adalah Planner Agent utama untuk sales skincare.
-Tugasmu: menentukan rencana SATU bubble balasan berikutnya berbasis konteks percakapan.
+Tugasmu: menyusun rencana MICRO untuk SATU bubble balasan berikutnya.
+Fokus: percakapan mengalir pelan-pelan, tidak terlihat seperti bot, tidak lompat jauh.
 
 Tujuan global:
 - Natural, empatik, tidak robotik.
 - Soft-selling: fokus solusi, bukan paksaan.
 - Struktur: Story -> Benefit -> Ajakan lembut.
 - Maksimal satu pertanyaan follow-up.
+- Gunakan gaya step-by-step: satu langkah kecil per turn.
 
 Balas JSON valid saja (tanpa markdown):
 {
-  "stage": "consultation",
-  "stage_reason": "alasan singkat pemilihan stage",
-  "objective": "tujuan bubble ini",
-  "tone": "gaya bahasa spesifik",
+  "micro_intent": "greeting_short|explore_problem|answer_product_fact|build_trust|offer_value|assist_order|farewell",
+  "stage": "greeting|opening|consultation|testimony|promo|closing|farewell",
+  "objective": "tujuan mikro untuk bubble ini",
+  "tone": "gaya bahasa singkat & natural",
   "soft_closing_strategy": "cara ajakan lembut",
+  "target_length": "very_short|short|normal",
+  "max_sentences": 1,
   "persuasion": {
     "story": "framing masalah user",
     "benefit": "manfaat yang mau ditekankan",
@@ -140,8 +144,13 @@ Balas JSON valid saja (tanpa markdown):
   "follow_up_question": "pertanyaan follow-up tunggal jika perlu",
   "must_include": ["poin wajib"],
   "must_avoid": ["poin yang harus dihindari"],
-  "agent_priorities": ["prioritas untuk subagent"]
+  "support_agents": ["empathy|product_knowledge|consultation"]
 }
+
+Aturan penting:
+- Jika user cuma sapa singkat (contoh: "halo", "hai"), pilih micro_intent=greeting_short.
+- Untuk greeting_short: target_length=very_short, max_sentences 1-2, jangan jelasin produk panjang.
+- Panggil support_agents seperlunya, jangan semua sekaligus.
 """
 
 
@@ -292,11 +301,14 @@ class PlannerAgent(BaseAgent):
 
     def _default_plan(self) -> dict:
         return {
+            "micro_intent": "explore_problem",
             "stage": "consultation",
-            "stage_reason": "fallback plan",
+            "stage_reason": "fallback micro plan",
             "objective": _DEFAULT_STAGE_OBJECTIVES["consultation"],
             "tone": "ramah, santai, empatik",
             "soft_closing_strategy": "beri solusi dulu lalu ajak lanjut dengan halus",
+            "target_length": "short",
+            "max_sentences": 2,
             "persuasion": {
                 "story": "Validasi cerita user tentang masalah kulit.",
                 "benefit": "Pilih manfaat produk yang paling relevan.",
@@ -313,11 +325,7 @@ class PlannerAgent(BaseAgent):
                 "mengarang data",
                 "lebih dari satu pertanyaan",
             ],
-            "agent_priorities": [
-                "empathy first",
-                "factual accuracy",
-                "consultative closing",
-            ],
+            "support_agents": ["empathy", "consultation"],
         }
 
     def _normalize_plan(self, raw_plan: dict) -> dict:
@@ -331,12 +339,29 @@ class PlannerAgent(BaseAgent):
         if stage not in _VALID_STAGES:
             stage = default["stage"]
 
+        micro_intent = str(plan.get("micro_intent") or "").strip().lower()
+        if not micro_intent:
+            micro_intent = self._infer_micro_intent_from_stage(stage)
+        stage = self._infer_stage_from_micro_intent(micro_intent, fallback_stage=stage)
+
         ask_follow_up = bool(plan.get("ask_follow_up", default["ask_follow_up"]))
         follow_up_question = str(plan.get("follow_up_question") or "").strip()
         if not ask_follow_up:
             follow_up_question = ""
 
+        target_length = str(plan.get("target_length") or default["target_length"]).strip().lower()
+        if target_length not in {"very_short", "short", "normal"}:
+            target_length = default["target_length"]
+
+        max_sentences = plan.get("max_sentences", default["max_sentences"])
+        try:
+            max_sentences = int(max_sentences)
+        except Exception:
+            max_sentences = int(default["max_sentences"])
+        max_sentences = max(1, min(max_sentences, 4))
+
         return {
+            "micro_intent": micro_intent,
             "stage": stage,
             "stage_reason": str(plan.get("stage_reason") or default["stage_reason"]).strip(),
             "objective": str(
@@ -346,6 +371,8 @@ class PlannerAgent(BaseAgent):
             "soft_closing_strategy": str(
                 plan.get("soft_closing_strategy") or default["soft_closing_strategy"]
             ).strip(),
+            "target_length": target_length,
+            "max_sentences": max_sentences,
             "persuasion": {
                 "story": str(persuasion.get("story") or default["persuasion"]["story"]).strip(),
                 "benefit": str(persuasion.get("benefit") or default["persuasion"]["benefit"]).strip(),
@@ -357,23 +384,141 @@ class PlannerAgent(BaseAgent):
             "follow_up_question": follow_up_question,
             "must_include": self._normalize_list(plan.get("must_include"), fallback=default["must_include"]),
             "must_avoid": self._normalize_list(plan.get("must_avoid"), fallback=default["must_avoid"]),
-            "agent_priorities": self._normalize_list(
-                plan.get("agent_priorities"), fallback=default["agent_priorities"]
+            "support_agents": self._normalize_list(
+                plan.get("support_agents"), fallback=default["support_agents"], max_items=3
             ),
         }
 
     @staticmethod
+    def _infer_micro_intent_from_stage(stage: str) -> str:
+        mapping = {
+            "greeting": "greeting_short",
+            "opening": "explore_problem",
+            "consultation": "explore_problem",
+            "testimony": "build_trust",
+            "promo": "offer_value",
+            "closing": "assist_order",
+            "farewell": "farewell",
+        }
+        return mapping.get(stage, "explore_problem")
+
+    @staticmethod
+    def _infer_stage_from_micro_intent(micro_intent: str, fallback_stage: str = "consultation") -> str:
+        mapping = {
+            "greeting_short": "greeting",
+            "explore_problem": "consultation",
+            "answer_product_fact": "consultation",
+            "build_trust": "testimony",
+            "offer_value": "promo",
+            "assist_order": "closing",
+            "farewell": "farewell",
+        }
+        stage = mapping.get(micro_intent, fallback_stage)
+        if stage not in _VALID_STAGES:
+            return fallback_stage if fallback_stage in _VALID_STAGES else "consultation"
+        return stage
+
+    @staticmethod
+    def _looks_like_short_greeting(input_text: str) -> bool:
+        normalized = re.sub(r"[^a-zA-Z0-9\s]", " ", str(input_text or "").lower())
+        tokens = [token for token in normalized.split() if token.strip()]
+        if not tokens:
+            return False
+        greeting_tokens = {
+            "halo",
+            "hai",
+            "hi",
+            "hello",
+            "pagi",
+            "siang",
+            "sore",
+            "malam",
+            "hey",
+            "helo",
+            "hy",
+            "yo",
+            "assalamualaikum",
+            "permisi",
+        }
+        if len(tokens) <= 3 and any(token in greeting_tokens for token in tokens):
+            return True
+        if len(tokens) == 1 and tokens[0] in greeting_tokens:
+            return True
+        return False
+
+    def _apply_micro_turn_overrides(self, plan: dict, input_text: str, history: list[dict] | None) -> dict:
+        updated = dict(plan)
+        history = history or []
+        is_first_turn = len(self._trim_history(history, max_messages=2)) == 0
+        if self._looks_like_short_greeting(input_text):
+            updated["micro_intent"] = "greeting_short"
+            updated["stage"] = "greeting" if is_first_turn else "opening"
+            updated["objective"] = "Bangun koneksi ringan lalu lanjutkan obrolan pelan-pelan."
+            updated["target_length"] = "very_short"
+            updated["max_sentences"] = 2
+            updated["ask_follow_up"] = True
+            if not str(updated.get("follow_up_question") or "").strip():
+                updated["follow_up_question"] = "Lagi pengen bahas masalah kulit apa dulu nih?"
+
+            must_avoid = list(updated.get("must_avoid", []))
+            for item in [
+                "penjelasan produk panjang",
+                "pitch sales panjang",
+                "daftar benefit beruntun",
+            ]:
+                if item not in must_avoid:
+                    must_avoid.append(item)
+            updated["must_avoid"] = must_avoid
+            updated["support_agents"] = ["empathy"]
+        return updated
+
+    @staticmethod
+    def _normalize_support_agents(plan: dict) -> list[str]:
+        raw = plan.get("support_agents") or []
+        allowed = {"empathy", "product_knowledge", "consultation"}
+        out: list[str] = []
+        for item in raw:
+            key = str(item).strip().lower()
+            if key in allowed and key not in out:
+                out.append(key)
+        return out[:3]
+
+    def _select_support_agents(self, plan: dict) -> list[tuple[str, object]]:
+        selected = self._normalize_support_agents(plan)
+        micro_intent = str(plan.get("micro_intent") or "")
+
+        if not selected:
+            selected = ["empathy"]
+            if micro_intent in {"answer_product_fact", "offer_value", "build_trust", "assist_order"}:
+                selected.append("product_knowledge")
+            if micro_intent in {"explore_problem", "offer_value", "assist_order"}:
+                selected.append("consultation")
+
+        if micro_intent == "greeting_short":
+            selected = ["empathy"]
+
+        by_key = {
+            "empathy": self.empathy_agent,
+            "product_knowledge": self.product_agent,
+            "consultation": self.consultation_agent,
+        }
+        return [(key, by_key[key]) for key in selected if key in by_key]
+
+    @staticmethod
     def _planning_config() -> GenerateConfig:
-        return GenerateConfig(temperature=0.15, max_tokens=560)
+        return GenerateConfig(temperature=0.12, max_tokens=380)
 
     @staticmethod
     def _draft_config(stage: str) -> GenerateConfig:
         temp = 0.45
+        max_tokens = 240
         if stage in {"promo", "closing"}:
             temp = 0.35
+            max_tokens = 220
         if stage in {"greeting", "opening"}:
-            temp = 0.4
-        return GenerateConfig(temperature=temp)
+            temp = 0.35
+            max_tokens = 120
+        return GenerateConfig(temperature=temp, max_tokens=max_tokens)
 
     def _plan_orchestration_with_llm(
         self,
@@ -405,10 +550,20 @@ class PlannerAgent(BaseAgent):
             response = self.llm.generate(messages=messages, config=self._planning_config())
             raw_text = self._strip_think_tags(response.text)
             plan = self._normalize_plan(self._extract_json_object(raw_text))
+            plan = self._apply_micro_turn_overrides(
+                plan=plan,
+                input_text=input_text,
+                history=history,
+            )
             usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=raw_text)
             return plan, usage
         except Exception:
             fallback = self._default_plan()
+            fallback = self._apply_micro_turn_overrides(
+                plan=fallback,
+                input_text=input_text,
+                history=history,
+            )
             usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=json.dumps(fallback))
             return fallback, usage
 
@@ -422,8 +577,9 @@ class PlannerAgent(BaseAgent):
         notes: list[SubAgentResult] = []
         usages: list[dict] = []
         history_text = self._format_history_for_planner(history)
+        selected_subagents = self._select_support_agents(plan)
 
-        for subagent in (self.empathy_agent, self.product_agent, self.consultation_agent):
+        for _agent_key, subagent in selected_subagents:
             note = subagent.run(
                 input_text=input_text,
                 history_text=history_text,
@@ -438,12 +594,20 @@ class PlannerAgent(BaseAgent):
 
     def _build_stage_block(self, plan: dict, notes: list[SubAgentResult]) -> str:
         stage = str(plan.get("stage") or "consultation")
+        micro_intent = str(plan.get("micro_intent") or "explore_problem")
+        target_length = str(plan.get("target_length") or "short")
+        max_sentences = int(plan.get("max_sentences") or 2)
+        support_agents = ", ".join(self._normalize_support_agents(plan)) or "none"
         persuasion = plan.get("persuasion", {})
         lines = [
+            f"MICRO_INTENT={micro_intent}",
             f"TAHAP_AKTIF={stage}",
             f"PANDUAN_TAHAP={_STAGE_COMPACT_GUIDANCE.get(stage, _STAGE_COMPACT_GUIDANCE['consultation'])}",
             f"TUJUAN_BUBBLE={plan.get('objective', '')}",
             f"GAYA_DETAIL={plan.get('tone', '')}",
+            f"PANJANG_TARGET={target_length}",
+            f"MAKS_KALIMAT={max_sentences}",
+            f"SUPPORT_AGENT_DIPAKAI={support_agents}",
             f"SOFT_CLOSING={plan.get('soft_closing_strategy', '')}",
             f"STORY_FOCUS={persuasion.get('story', '')}",
             f"BENEFIT_FOCUS={persuasion.get('benefit', '')}",
@@ -453,7 +617,7 @@ class PlannerAgent(BaseAgent):
                 f"ask={str(bool(plan.get('ask_follow_up', False))).lower()}, "
                 f"question={str(plan.get('follow_up_question', '')).strip()}"
             ),
-            "FORMAT=2-4 kalimat natural, tidak terdengar template bot.",
+            "FORMAT=natural, ngobrol pelan-pelan, jangan terdengar template bot.",
         ]
         if plan.get("must_include"):
             lines.append("MUST_INCLUDE:")
@@ -478,6 +642,7 @@ class PlannerAgent(BaseAgent):
     ) -> list[dict[str, str]]:
         context = context or {}
         stage = str(plan.get("stage") or "consultation")
+        micro_intent = str(plan.get("micro_intent") or "explore_problem")
         memory_summary = context.get("memory_summary")
         database_context = context.get("database_context")
         vector_context = context.get("vector_context")
@@ -495,13 +660,17 @@ class PlannerAgent(BaseAgent):
                 sales_prompt = ""
 
         stage_block = self._build_stage_block(plan, notes)
-        product_block = PRODUCT_KNOWLEDGE_BRIEF if stage in _KNOWLEDGE_BRIEF_STAGES else PRODUCT_KNOWLEDGE_FULL
+        if micro_intent == "greeting_short":
+            product_block = ""
+        else:
+            product_block = PRODUCT_KNOWLEDGE_BRIEF if stage in _KNOWLEDGE_BRIEF_STAGES else PRODUCT_KNOWLEDGE_FULL
 
         system_parts = [BASE_SYSTEM_PROMPT]
         if sales_prompt:
             system_parts.append(sales_prompt)
         system_parts.append(stage_block)
-        system_parts.append(product_block)
+        if product_block:
+            system_parts.append(product_block)
         system_prompt = "\n\n".join(system_parts)
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
@@ -556,6 +725,11 @@ class PlannerAgent(BaseAgent):
                 config=self._draft_config(stage),
             )
             output_text = self._strip_think_tags(response.text)
+            output_text = self._enforce_output_constraints(
+                text=output_text,
+                plan=plan,
+                input_text=input_text,
+            )
             usage = self._normalize_usage(response.usage, prompt_text=prompt_text, output_text=output_text)
             if output_text:
                 return output_text, usage
@@ -565,6 +739,50 @@ class PlannerAgent(BaseAgent):
         fallback = "Makasih udah cerita. Biar aku bantu paling pas, boleh aku tahu kondisi kulitmu sekarang lagi cenderung berminyak banget atau ada jerawat meradang?"
         usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=fallback)
         return fallback, usage
+
+    def _enforce_output_constraints(self, text: str, plan: dict, input_text: str) -> str:
+        output = " ".join(str(text or "").split()).strip()
+        if not output:
+            return output
+
+        target_length = str(plan.get("target_length") or "short").strip().lower()
+        max_sentences = plan.get("max_sentences", 2)
+        try:
+            max_sentences = int(max_sentences)
+        except Exception:
+            max_sentences = 2
+        max_sentences = max(1, min(max_sentences, 4))
+
+        if self._looks_like_short_greeting(input_text):
+            target_length = "very_short"
+            max_sentences = min(max_sentences, 2)
+
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", output) if item.strip()]
+        if sentences:
+            output = " ".join(sentences[:max_sentences]).strip()
+
+        max_chars_map = {
+            "very_short": 130,
+            "short": 220,
+            "normal": 420,
+        }
+        max_chars = max_chars_map.get(target_length, 220)
+        if len(output) > max_chars:
+            clipped = output[:max_chars].rsplit(" ", 1)[0].strip()
+            if clipped:
+                output = f"{clipped}..."
+            else:
+                output = output[:max_chars].strip()
+        return output
+
+    def _should_run_reflection(self, plan: dict, input_text: str) -> bool:
+        micro_intent = str(plan.get("micro_intent") or "").strip().lower()
+        target_length = str(plan.get("target_length") or "").strip().lower()
+        if micro_intent == "greeting_short":
+            return False
+        if target_length == "very_short" and self._looks_like_short_greeting(input_text):
+            return False
+        return True
 
     @staticmethod
     def _chunk_text(text: str, chunk_size: int = 70) -> list[str]:
@@ -584,12 +802,16 @@ class PlannerAgent(BaseAgent):
         return {
             "agent": "sales",
             "stage": plan.get("stage", "consultation"),
+            "micro_intent": plan.get("micro_intent", "explore_problem"),
             "orchestration": {
                 "objective": plan.get("objective", ""),
                 "tone": plan.get("tone", ""),
                 "soft_closing_strategy": plan.get("soft_closing_strategy", ""),
                 "stage_reason": plan.get("stage_reason", ""),
+                "target_length": plan.get("target_length", "short"),
+                "max_sentences": plan.get("max_sentences", 2),
             },
+            "support_agents": self._normalize_support_agents(plan),
             "subagents": [
                 {
                     "agent": note.agent,
@@ -631,15 +853,33 @@ class PlannerAgent(BaseAgent):
             notes=notes,
             context=context,
         )
-        history_text = self._format_history_for_planner(history)
-        reflection = self.reflection_agent.review(
-            input_text=input_text,
-            history_text=history_text,
-            plan=plan,
-            notes=notes,
-            draft_response=draft_output,
-        )
+        if self._should_run_reflection(plan=plan, input_text=input_text):
+            history_text = self._format_history_for_planner(history)
+            reflection = self.reflection_agent.review(
+                input_text=input_text,
+                history_text=history_text,
+                plan=plan,
+                notes=notes,
+                draft_response=draft_output,
+            )
+        else:
+            reflection = type(
+                "ReflectionSkip",
+                (),
+                {
+                    "approved": True,
+                    "critique": [],
+                    "revised_response": draft_output,
+                    "usage": self._normalize_usage({}, prompt_text="", output_text=""),
+                },
+            )()
+
         final_output = (reflection.revised_response or draft_output).strip() or draft_output
+        final_output = self._enforce_output_constraints(
+            text=final_output,
+            plan=plan,
+            input_text=input_text,
+        )
         usage = self._merge_usage(planning_usage, subagent_usage, draft_usage, reflection.usage)
         metadata = self._build_metadata(plan=plan, notes=notes, reflection=reflection, usage=usage)
 
@@ -663,16 +903,15 @@ class PlannerAgent(BaseAgent):
             yield {
                 "type": "thinking",
                 "content": (
-                    f"Planner stage: {stage}\n"
-                    f"Objective: {plan.get('objective', '')}\n"
+                    f"Planner micro-intent: {plan.get('micro_intent', 'explore_problem')}\n"
                 ),
             }
 
             history_text = self._format_history_for_planner(history)
             notes: list[SubAgentResult] = []
             subagent_usages: list[dict] = []
-
-            for subagent in (self.empathy_agent, self.product_agent, self.consultation_agent):
+            selected_subagents = self._select_support_agents(plan)
+            for _agent_key, subagent in selected_subagents:
                 note = subagent.run(
                     input_text=input_text,
                     history_text=history_text,
@@ -685,7 +924,7 @@ class PlannerAgent(BaseAgent):
                 yield {
                     "type": "thinking",
                     "content": (
-                        f"Subagent {note.agent}: {note.summary}\n"
+                        f"Support agent aktif: {note.agent}\n"
                     ),
                 }
 
@@ -696,16 +935,33 @@ class PlannerAgent(BaseAgent):
                 notes=notes,
                 context=context,
             )
-            yield {"type": "thinking", "content": "Reflection: mengecek kualitas jawaban final...\n"}
+            if self._should_run_reflection(plan=plan, input_text=input_text):
+                yield {"type": "thinking", "content": "Reflection: mengecek kualitas jawaban final...\n"}
+                reflection = self.reflection_agent.review(
+                    input_text=input_text,
+                    history_text=history_text,
+                    plan=plan,
+                    notes=notes,
+                    draft_response=draft_output,
+                )
+            else:
+                reflection = type(
+                    "ReflectionSkip",
+                    (),
+                    {
+                        "approved": True,
+                        "critique": [],
+                        "revised_response": draft_output,
+                        "usage": self._normalize_usage({}, prompt_text="", output_text=""),
+                    },
+                )()
 
-            reflection = self.reflection_agent.review(
-                input_text=input_text,
-                history_text=history_text,
-                plan=plan,
-                notes=notes,
-                draft_response=draft_output,
-            )
             final_output = (reflection.revised_response or draft_output).strip() or draft_output
+            final_output = self._enforce_output_constraints(
+                text=final_output,
+                plan=plan,
+                input_text=input_text,
+            )
             usage = self._merge_usage(
                 planning_usage,
                 self._merge_usage(*subagent_usages),
