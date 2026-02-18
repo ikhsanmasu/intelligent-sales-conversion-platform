@@ -216,7 +216,7 @@ function TokenStackedChart({ points }) {
   );
 }
 
-export default function BillingPanel({ userId = "0" }) {
+export default function BillingPanel({ userId = "all" }) {
   const [rangeDays, setRangeDays] = useState(30);
   const [billing, setBilling] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -443,4 +443,3 @@ export default function BillingPanel({ userId = "0" }) {
     </main>
   );
 }
-

@@ -62,6 +62,8 @@ _PROVIDER_DEFAULT_PRICING_PER_1M: dict[str, tuple[float, float]] = {
     "xai": (3.0, 12.0),
 }
 
+_CHANNEL_SCOPES = {"web", "whatsapp", "telegram"}
+
 
 def _to_int(value, default: int = 0) -> int:
     try:
@@ -114,6 +116,17 @@ def _usage_event_to_dict(event: LLMUsageEvent) -> dict:
         "pricing_source": event.pricing_source,
         "created_at": float(event.created_at),
     }
+
+
+def _resolve_user_scope(user_id: str) -> tuple[str, str]:
+    raw = str(user_id or "").strip()
+    lowered = raw.lower()
+
+    if not raw or lowered in {"all", "*"}:
+        return "all", ""
+    if lowered in _CHANNEL_SCOPES:
+        return "channel", lowered
+    return "exact", raw
 
 
 def _extract_usage_payload(
@@ -190,14 +203,21 @@ def list_usage_events(
     safe_limit = max(1, min(int(limit), 2000))
     start_at = time.time() - (safe_days * 86400)
 
+    scope_type, scope_value = _resolve_user_scope(user_id)
+
+    query = (
+        select(LLMUsageEvent)
+        .where(LLMUsageEvent.created_at >= start_at)
+        .order_by(LLMUsageEvent.created_at.desc(), LLMUsageEvent.id.desc())
+        .limit(safe_limit)
+    )
+    if scope_type == "exact":
+        query = query.where(LLMUsageEvent.user_id == scope_value)
+    elif scope_type == "channel":
+        query = query.where(LLMUsageEvent.user_id.like(f"{scope_value}:%"))
+
     with Session(app_engine) as session:
-        events = session.exec(
-            select(LLMUsageEvent)
-            .where(LLMUsageEvent.user_id == user_id)
-            .where(LLMUsageEvent.created_at >= start_at)
-            .order_by(LLMUsageEvent.created_at.desc(), LLMUsageEvent.id.desc())
-            .limit(safe_limit)
-        ).all()
+        events = session.exec(query).all()
     return [_usage_event_to_dict(event) for event in events]
 
 
@@ -210,13 +230,20 @@ def get_billing_summary(
     safe_recent_limit = max(1, min(int(recent_limit), 200))
     start_at = time.time() - (safe_days * 86400)
 
+    scope_type, scope_value = _resolve_user_scope(user_id)
+
+    query = (
+        select(LLMUsageEvent)
+        .where(LLMUsageEvent.created_at >= start_at)
+        .order_by(LLMUsageEvent.created_at.asc(), LLMUsageEvent.id.asc())
+    )
+    if scope_type == "exact":
+        query = query.where(LLMUsageEvent.user_id == scope_value)
+    elif scope_type == "channel":
+        query = query.where(LLMUsageEvent.user_id.like(f"{scope_value}:%"))
+
     with Session(app_engine) as session:
-        events = session.exec(
-            select(LLMUsageEvent)
-            .where(LLMUsageEvent.user_id == user_id)
-            .where(LLMUsageEvent.created_at >= start_at)
-            .order_by(LLMUsageEvent.created_at.asc(), LLMUsageEvent.id.asc())
-        ).all()
+        events = session.exec(query).all()
 
     totals = {
         "requests": 0,
@@ -331,4 +358,3 @@ def get_billing_summary(
         ],
         "recent": recent_items,
     }
-

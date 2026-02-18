@@ -7,6 +7,7 @@ import ConversationsPanel from "./components/ConversationsPanel";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 const USER_ID = "0";
+const BILLING_USER_ID = "all";
 const SIDEBAR_STORAGE_KEY = "playground.sidebarCollapsed";
 const THEME_STORAGE_KEY = "playground.theme";
 
@@ -193,7 +194,7 @@ export default function App() {
       case "config":
         return <ConfigPanel />;
       case "billing":
-        return <BillingPanel userId={USER_ID} />;
+        return <BillingPanel userId={BILLING_USER_ID} />;
       default:
         return (
           <Playground

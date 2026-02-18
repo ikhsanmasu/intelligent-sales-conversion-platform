@@ -5,6 +5,7 @@ from app.core.llm.service import list_llm_options
 from app.modules.admin.service import (
     list_configs,
     list_prompts,
+    reset_prompt,
     update_configs,
     update_prompt,
 )
@@ -58,3 +59,11 @@ async def put_prompt(slug: str, request: UpdatePromptRequest):
     if not ok:
         raise HTTPException(status_code=404, detail="Prompt not found")
     return {"status": "updated"}
+
+
+@router.delete("/prompts/{slug}/reset")
+async def reset_prompt_to_default(slug: str):
+    ok = reset_prompt(slug)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"status": "reset", "slug": slug}

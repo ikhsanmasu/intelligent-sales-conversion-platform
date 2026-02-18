@@ -7,6 +7,7 @@ import httpx
 from app.channels.common import natural_read_delay, process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
+    format_whatsapp_reply_text,
     get_testimony_images,
     looks_like_testimony_reply,
 )
@@ -191,9 +192,14 @@ def handle_webhook(payload: dict) -> dict:
 
                 metadata = result.get("assistant_metadata") or {}
                 stage = str(metadata.get("stage") or "").strip().lower()
-                reply_text = str(result.get("reply_text") or "").strip()
+                raw_reply_text = str(result.get("reply_text") or "").strip()
+                reply_text = format_whatsapp_reply_text(raw_reply_text)
 
-                if _should_attach_testimony_media(stage=stage, user_text=body, assistant_text=reply_text) and reply_text:
+                if _should_attach_testimony_media(
+                    stage=stage,
+                    user_text=body,
+                    assistant_text=raw_reply_text,
+                ) and raw_reply_text:
                     try:
                         base_url = (settings.PUBLIC_BASE_URL or "").strip()
                         images = get_testimony_images(base_url=base_url) if base_url else []
@@ -211,10 +217,14 @@ def handle_webhook(payload: dict) -> dict:
                                     media_exc,
                                 )
 
-                        reply_text = format_testimony_reply_text(reply_text)
+                        reply_text = format_whatsapp_reply_text(
+                            format_testimony_reply_text(raw_reply_text)
+                        )
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Failed to send WhatsApp testimonial media: %s", exc)
-                        reply_text = format_testimony_reply_text(reply_text)
+                        reply_text = format_whatsapp_reply_text(
+                            format_testimony_reply_text(raw_reply_text)
+                        )
 
                 if reply_text:
                     try:

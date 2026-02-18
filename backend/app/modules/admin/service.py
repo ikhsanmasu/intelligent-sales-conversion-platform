@@ -176,6 +176,18 @@ def update_prompt(slug: str, data: dict[str, str]) -> bool:
         return True
 
 
+def reset_prompt(slug: str) -> bool:
+    """Delete DB override so the seeder default becomes active again."""
+    if slug not in _PROMPT_FALLBACK:
+        return False
+    with Session(app_engine) as session:
+        existing = session.get(PromptOverride, slug)
+        if existing:
+            session.delete(existing)
+            session.commit()
+    return True
+
+
 def resolve_prompt(slug: str) -> str:
     with Session(app_engine) as session:
         existing = session.get(PromptOverride, slug)
