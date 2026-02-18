@@ -834,6 +834,13 @@ body {
   color: var(--text-secondary);
 }
 
+.content-block img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 10px;
+  margin: 4px 0;
+}
+
 .token-meta {
   margin-top: 10px;
   display: flex;

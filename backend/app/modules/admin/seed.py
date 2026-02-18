@@ -50,12 +50,12 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
             "Cara pakai: basahi wajah, aplikasikan dan pijat lembut, bilas bersih, gunakan 2-3 kali sehari.\n\n"
             "Ketentuan komplain: wajib video unboxing tanpa putus; tanpa video unboxing komplain tidak diproses.\n\n"
             "Testimoni:\n"
-            "- Amanda (amandabilla98): \"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, "
-            "dan ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi "
-            "nyari facial wash buat acne care!\"\n"
-            "- Silmi (silmisyauz): \"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang "
-            "cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak "
-            "bikin iritasi. Jerawat ku jauh lebih terkontrol sejak pakai ini.\""
+            "- Amanda (amandabilla98): \"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake "
+            "obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
+            "dan ngebantu redain jerawat yang lagi meradang.\"\n"
+            "- Silmi (silmisyauz): \"Udah pake ini dari tahun 2023, selalu repurchase karena cocok "
+            "banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya "
+            "kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much.\""
         ),
         "variables": "stage,stage_instruction",
     },

@@ -6,8 +6,8 @@ import httpx
 from app.channels.common import process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
+    get_testimony_images,
     looks_like_testimony_reply,
-    pick_random_testimonial_image,
 )
 from app.core.config import settings
 
@@ -147,23 +147,21 @@ def handle_webhook(payload: dict) -> dict:
 
                 if _should_attach_testimony_media(stage=stage, user_text=body, assistant_text=reply_text) and reply_text:
                     try:
-                        image = pick_random_testimonial_image()
-                        caption = f"Vibes testimoni hari ini: {image.title}"
-                        try:
-                            _send_whatsapp_image(
-                                recipient=sender,
-                                image_url=image.image_url,
-                                caption=caption,
-                            )
-                        except Exception as media_exc:  # noqa: BLE001
-                            logger.warning(
-                                "Failed to send WhatsApp image, fallback to link text: %s",
-                                media_exc,
-                            )
-                            _send_whatsapp_message(
-                                recipient=sender,
-                                text=f"{caption}\n{image.image_url}",
-                            )
+                        base_url = (settings.PUBLIC_BASE_URL or "").strip()
+                        images = get_testimony_images(base_url=base_url) if base_url else []
+                        for image in images:
+                            try:
+                                _send_whatsapp_image(
+                                    recipient=sender,
+                                    image_url=image.image_url,
+                                    caption=image.title,
+                                )
+                            except Exception as media_exc:  # noqa: BLE001
+                                logger.warning(
+                                    "Failed to send WhatsApp image %s: %s",
+                                    image.title,
+                                    media_exc,
+                                )
 
                         reply_text = format_testimony_reply_text(reply_text)
                     except Exception as exc:  # noqa: BLE001

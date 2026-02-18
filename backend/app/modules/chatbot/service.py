@@ -6,6 +6,7 @@ from app.agents.memory import create_memory_agent
 from app.agents.memory.store import get_memory_summary
 from app.agents.planner import create_planner_agent
 from app.agents.vector import create_vector_agent
+from app.channels.media import build_testimony_markdown_images, looks_like_testimony_reply
 from app.modules.billing.service import record_usage_event
 from app.modules.admin.service import resolve_config
 from app.modules.chatbot.repository import ChatRepository
@@ -13,6 +14,15 @@ from app.modules.chatbot.schemas import ChatRequest, ChatResponse
 
 
 _FALSE_VALUES = {"0", "false", "off", "no", "disabled"}
+
+
+def _maybe_append_testimony_images(text: str, stage: str) -> str:
+    """Append markdown testimony images when the response is a testimony reply."""
+    if stage == "testimony" or looks_like_testimony_reply(text):
+        images_md = build_testimony_markdown_images()
+        if images_md:
+            return f"{text.rstrip()}\n\n{images_md}"
+    return text
 
 
 def _build_history(request: ChatRequest) -> list[dict]:
@@ -114,6 +124,10 @@ def chat(request: ChatRequest) -> ChatResponse:
     context.update(_collect_knowledge_context(request.message, history=history))
     result = planner.execute(request.message, history=history, context=context)
 
+    # Inject testimony images for dashboard/API consumers
+    stage = (result.metadata or {}).get("stage", "")
+    result.output = _maybe_append_testimony_images(result.output, stage)
+
     if request.user_id:
         try:
             memory_agent = create_memory_agent()
@@ -165,6 +179,15 @@ def chat_stream(request: ChatRequest) -> Generator[str, None, None]:
         if event.get("type") == "meta":
             last_metadata = event.get("metadata")
         yield f"data: {json.dumps(event)}\n\n"
+
+    # Inject testimony images at end of stream for dashboard rendering
+    stream_stage = (last_metadata or {}).get("stage", "")
+    if stream_stage == "testimony" or looks_like_testimony_reply(full_content):
+        images_md = build_testimony_markdown_images()
+        if images_md:
+            img_chunk = f"\n\n{images_md}"
+            full_content += img_chunk
+            yield f"data: {json.dumps({'type': 'content', 'content': img_chunk})}\n\n"
 
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

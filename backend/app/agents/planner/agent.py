@@ -25,10 +25,14 @@ mengangkat sebum berlebih, kotoran, dan sel kulit mati.
 
 Manfaat utama:
 - Membantu menghambat bakteri penyebab jerawat (uji in-vitro)
+- Mencegah bakteri penyebab jerawat
 - Membantu mengurangi minyak berlebih
 - Membantu membersihkan hingga ke pori
 - Membantu mengangkat sel kulit mati
 - Scrub lembut biodegradable
+- Terbukti secara klinis mengontrol sebum hingga 8 jam
+- Menjaga kelembapan kulit
+- Tidak menimbulkan iritasi
 
 Kandungan utama:
 - BHA
@@ -48,9 +52,9 @@ Ketentuan pengiriman dan komplain:
 
 Testimoni:
 1) Amanda (amandabilla98):
-   "Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash buat acne care!"
+   "Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming dan ngebantu redain jerawat yang lagi meradang."
 2) Silmi (silmisyauz):
-   "Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. Jerawat ku jauh lebih terkontrol sejak pakai ini."
+   "Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much."
 """
 
 PRODUCT_KNOWLEDGE_BRIEF = (
@@ -61,11 +65,20 @@ PRODUCT_KNOWLEDGE_BRIEF = (
 # ---------------------------------------------------------------------------
 # Base System Prompt — streamlined
 # ---------------------------------------------------------------------------
-BASE_SYSTEM_PROMPT = """Kamu adalah chatbot sales skincare yang empatik dan natural.
-Gunakan bahasa Indonesia santai-sopan, fokus bantu masalah user dulu.
-Gunakan pola: empati -> manfaat relevan -> ajakan lembut.
-Jangan mengarang data, jangan klaim medis berlebihan, jangan promo palsu.
-Jawaban ringkas (2-4 paragraf pendek) dan tutup dengan pertanyaan lanjutan/CTA halus.
+BASE_SYSTEM_PROMPT = """Kamu adalah Lia, sales consultant dari tim Mengantar.
+Kamu HANYA menjual satu produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP).
+Semua pertanyaan tentang produk = tentang ERHA ACSBP. Kamu SUDAH TAU produknya.
+
+ATURAN KETAT:
+- JANGAN PERNAH minta user kirim foto produk, nama produk, atau kode produk.
+- JANGAN PERNAH bertanya "produk yang mana?" — kamu hanya jual SATU produk.
+- Jika ditanya "aman ga?" → jawab dengan data BPOM dan Halal MUI.
+- Jika ditanya "ini siapa?" / "kak siapa?" → jawab "Aku Lia dari tim Mengantar".
+- JAWAB SINGKAT. Maksimal 2-3 kalimat per respons.
+- Bahasa Indonesia santai-sopan, seperti chat teman.
+- Setiap respons ada ajakan halus ke pembelian (soft CTA).
+- Pola: Cerita/Empati → Manfaat → Ajakan beli.
+- Jangan mengarang data, jangan klaim medis berlebihan.
 """
 
 # ---------------------------------------------------------------------------
@@ -74,16 +87,16 @@ Jawaban ringkas (2-4 paragraf pendek) dan tutup dengan pertanyaan lanjutan/CTA h
 STAGE_PROMPTS = {
     "greeting": {
         "instruction": (
-            "- Sapa user dengan hangat dan personal, tanyakan kabar atau nama.\n"
-            "- Bangun koneksi awal: tunjukkan kamu siap membantu.\n"
+            "- Perkenalkan diri: 'Hai kak! Aku Lia dari Mengantar.'\n"
+            "- Tanyakan nama user.\n"
             "- JANGAN langsung menyebut produk atau jualan."
         ),
         "tone": "Hangat, bersahabat, seperti teman yang baru kenalan.",
         "emotional_hook": "Buat user merasa disambut dan nyaman untuk curhat.",
         "do_not": "Jangan sebut nama produk, harga, atau manfaat apapun di tahap ini.",
         "example_pattern": (
-            "Haii! Selamat datang~ Seneng banget kamu mampir. "
-            "Btw, boleh tau nama kamu siapa? Biar ngobrolnya lebih asik~"
+            "Hai kak! Aku Lia dari Mengantar~ "
+            "Boleh tau nama kamu siapa? Biar ngobrolnya lebih asik~"
         ),
         "transition_trigger": "User merespons sapaan / menyebut nama / menyebut masalah kulit.",
         "response_length": "1-2 kalimat saja. Singkat dan hangat.",
@@ -131,13 +144,14 @@ STAGE_PROMPTS = {
             "- Boleh tambahkan konteks singkat sebelum/sesudah kutipan.\n\n"
             "TESTIMONI VERBATIM (wajib dikutip persis):\n\n"
             "1) @amandabilla98 (Amanda):\n"
-            "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget "
-            "redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash "
-            "buat acne care!\"\n\n"
+            "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
+            "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
+            "dan ngebantu redain jerawat yang lagi meradang.\"\n\n"
             "2) @silmisyauz (Silmi):\n"
-            "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat "
-            "kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
-            "Jerawat ku jauh lebih terkontrol sejak pakai ini.\""
+            "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
+            "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
+            "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
+            "ada tapi gak to much.\""
         ),
         "tone": "Antusias berbagi cerita sukses, seperti kasih rekomendasi ke teman.",
         "emotional_hook": "Social proof — orang lain dengan masalah serupa sudah terbantu.",
@@ -145,13 +159,14 @@ STAGE_PROMPTS = {
         "example_pattern": (
             "Oh iya, ada yang ceritanya mirip kayak kamu nih!\n\n"
             "@amandabilla98 (Amanda) bilang:\n"
-            "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget "
-            "redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash "
-            "buat acne care!\"\n\n"
+            "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
+            "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
+            "dan ngebantu redain jerawat yang lagi meradang.\"\n\n"
             "Terus @silmisyauz (Silmi) juga bilang:\n"
-            "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat "
-            "kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
-            "Jerawat ku jauh lebih terkontrol sejak pakai ini.\"\n\n"
+            "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
+            "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
+            "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
+            "ada tapi gak to much.\"\n\n"
             "Relatable kan?"
         ),
         "transition_trigger": "User tertarik / mau tau harga / mau beli.",
@@ -230,10 +245,12 @@ PROMO_KEYWORDS = {
     "berapa", "harganya",
 }
 TESTIMONY_KEYWORDS = {
-    "testimoni", "review", "bukti", "pengalaman", "real",
+    "testimoni", "review", "bukti", "cocok gak", "yakin",
+    "pengalaman", "real",
 }
 CONSULTATION_KEYWORDS = {
     "jerawat", "berminyak", "bruntusan", "kusam", "iritasi", "komedo", "sensitif",
+    "aman",
 }
 FAREWELL_KEYWORDS = {
     "makasih", "terima kasih", "thanks", "oke sip", "dadah", "bye",
@@ -242,39 +259,38 @@ FAREWELL_KEYWORDS = {
 # Short keywords (≤3 chars) that need word-boundary matching to avoid false positives
 _SHORT_KEYWORDS = {"co", "gas", "bye"}
 
-# Product knowledge tiers: None / Brief / Full
-_KNOWLEDGE_NONE_STAGES = {"greeting", "farewell"}
-_KNOWLEDGE_BRIEF_STAGES = {"opening", "testimony", "promo", "closing"}
+# Knowledge tiers: brief for greeting/farewell, full for everything else
+_KNOWLEDGE_BRIEF_STAGES = {"greeting", "farewell"}
 # All other stages get full knowledge
 
 # Ordered stages for progression
 _STAGE_ORDER = ["greeting", "opening", "consultation", "testimony", "promo", "closing", "farewell"]
 
-_MAX_HISTORY_MESSAGES = 4
+_MAX_HISTORY_MESSAGES = 10
 
 _STAGE_COMPACT_GUIDANCE = {
-    "greeting": "Sapa hangat, jangan jualan, 1-2 kalimat.",
-    "opening": "Validasi masalah user dan ajak cerita singkat.",
-    "consultation": "Empati + edukasi manfaat relevan. Hindari klaim medis berlebihan.",
-    "testimony": "Berikan 1 testimoni paling relevan. Berikan testimoni kedua hanya jika diminta.",
-    "promo": "Sebut harga real, dorong cek ongkir/benefit sesuai lokasi, tanpa promo palsu.",
-    "closing": "Beri langkah order jelas dan ingatkan video unboxing.",
-    "farewell": "Tutup hangat dan personal, tanpa hard-selling.",
+    "greeting": "Perkenalkan diri: 'Hai kak! Aku Lia dari Mengantar.' Tanyakan nama. MAX 2 kalimat.",
+    "opening": "Validasi masalah user, ajak cerita. MAX 2-3 kalimat.",
+    "consultation": "Empati + manfaat ERHA ACSBP yang relevan + ajakan coba. MAX 2-3 kalimat.",
+    "testimony": "Berikan 1 testimoni paling relevan. Berikan kedua jika diminta. MAX 2-3 kalimat + kutipan.",
+    "promo": "Sebut harga Rp110.900, BPOM + Halal, ajak beli. MAX 2-3 kalimat.",
+    "closing": "Langkah order jelas, minta alamat, ingatkan video unboxing. MAX 3 kalimat.",
+    "farewell": "Tutup hangat dan personal, tanpa hard-selling. MAX 2 kalimat.",
 }
 
 _TESTIMONIAL_QUOTES = [
     (
         "@amandabilla98 (Amanda): "
-        "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan "
-        "ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it "
-        "buat yang lagi nyari facial wash buat acne care!\""
+        "\"Oke banget sih buat perawatan jerawat! Awalnya aku cuma pake obat totol "
+        "jerawatnya cocok banget akhirnya nyoba si facial washnya. Cocok, calming "
+        "dan ngebantu redain jerawat yang lagi meradang.\""
     ),
     (
         "@silmisyauz (Silmi): "
-        "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang "
-        "cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga "
-        "halus, jadi nggak bikin iritasi. Jerawat ku jauh lebih terkontrol "
-        "sejak pakai ini.\""
+        "\"Udah pake ini dari tahun 2023, selalu repurchase karena cocok banget "
+        "sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, "
+        "teksturnya kayak ada scrub kecil tapi ga sakit sama sekali, busa nya "
+        "ada tapi gak to much.\""
     ),
 ]
 
@@ -510,30 +526,19 @@ class PlannerAgent(BaseAgent):
 
     @staticmethod
     def _resolve_stage(intent: str, state: ConversationState) -> str:
-        """Combine intent + state and keep progression coherent."""
+        """Combine intent + state — honor user intent directly, no rigid prerequisites."""
         if intent == "farewell":
             return "farewell"
-
         if intent == "order":
-            if "consultation" not in state.covered_stages:
-                return "consultation"
-            if "promo" not in state.covered_stages:
-                return "promo"
             return "closing"
-
         if intent == "price":
-            if "consultation" not in state.covered_stages:
-                return "consultation"
             return "promo"
-
         if intent == "testimony":
-            if "consultation" not in state.covered_stages:
-                return "consultation"
             return "testimony"
-
         if intent == "skin_concern":
             return "consultation"
 
+        # General intent: progress through stages naturally
         for stage in _STAGE_ORDER:
             if stage not in state.covered_stages:
                 return stage
@@ -572,7 +577,7 @@ class PlannerAgent(BaseAgent):
         lines = [
             f"TAHAP_AKTIF={stage}",
             f"ATURAN_TAHAP={guidance}",
-            "FORMAT=Ringkas, 2-4 paragraf pendek, bahasa Indonesia santai sopan.",
+            "FORMAT=Maksimal 2-3 kalimat, bahasa Indonesia santai sopan.",
             "WAJIB=Selalu tutup dengan pertanyaan lanjutan atau CTA halus.",
         ]
 
@@ -617,9 +622,7 @@ class PlannerAgent(BaseAgent):
             except Exception:
                 sales_prompt = ""
 
-        if stage in _KNOWLEDGE_NONE_STAGES:
-            product_block = ""
-        elif stage in _KNOWLEDGE_BRIEF_STAGES:
+        if stage in _KNOWLEDGE_BRIEF_STAGES:
             product_block = PRODUCT_KNOWLEDGE_BRIEF
         else:
             product_block = PRODUCT_KNOWLEDGE_FULL

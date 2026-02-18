@@ -9,6 +9,9 @@ load_dotenv(dotenv_path=ENV_FILE)
 
 
 class Settings(BaseSettings):
+    # Public base URL (used for WhatsApp/Telegram image links)
+    PUBLIC_BASE_URL: str = ""
+
     # Chatbot
     CHATBOT_DEFAULT_LLM: str = "openai"
     CHATBOT_DEFAULT_MODEL: str = "gpt-5.2"

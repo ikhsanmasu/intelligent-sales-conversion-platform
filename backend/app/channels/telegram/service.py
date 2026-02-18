@@ -8,8 +8,8 @@ from fastapi import HTTPException
 from app.channels.common import process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
+    get_testimony_images,
     looks_like_testimony_reply,
-    pick_random_testimonial_image,
 )
 from app.core.config import settings
 
@@ -158,28 +158,20 @@ def handle_webhook(payload: dict, secret_header: str | None = None) -> dict:
 
     if _should_attach_testimony_media(stage=stage, user_text=text, assistant_text=reply_text) and reply_text:
         try:
-            image = pick_random_testimonial_image()
-            caption = f"Vibes testimoni hari ini: {image.title}"
-            try:
-                _send_telegram_photo(
-                    chat_id=chat_id,
-                    photo_url=image.image_url,
-                    caption=caption,
-                )
-            except Exception as photo_exc:  # noqa: BLE001
-                logger.warning(
-                    "Failed to send Telegram photo, fallback to link text: %s",
-                    photo_exc,
-                )
+            base_url = (settings.PUBLIC_BASE_URL or "").strip()
+            images = get_testimony_images(base_url=base_url) if base_url else []
+            for image in images:
                 try:
-                    _send_telegram_message(
+                    _send_telegram_photo(
                         chat_id=chat_id,
-                        text=f"{caption}\n{image.image_url}",
+                        photo_url=image.image_url,
+                        caption=image.title,
                     )
-                except Exception as fallback_exc:  # noqa: BLE001
+                except Exception as photo_exc:  # noqa: BLE001
                     logger.warning(
-                        "Failed to send Telegram photo fallback text: %s",
-                        fallback_exc,
+                        "Failed to send Telegram photo %s: %s",
+                        image.title,
+                        photo_exc,
                     )
             reply_text = format_testimony_reply_text(reply_text)
         except Exception as exc:  # noqa: BLE001

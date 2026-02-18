@@ -26,15 +26,14 @@ DEFAULT_PRODUCT = {
         "Tanpa video unboxing, komplain tidak diproses."
     ),
     "testimony_1": (
-        "Amanda (amandabilla98): Oke banget sih buat perawatan jerawat. "
-        "Dia tuh lembut, calming, dan ngebantu banget redain jerawat yang lagi meradang. "
-        "Pokoknya worth it buat yang lagi nyari facial wash buat acne care!"
+        "Amanda (amandabilla98): Oke banget sih buat perawatan jerawat! "
+        "Awalnya aku cuma pake obat totol jerawatnya cocok banget akhirnya nyoba si facial washnya. "
+        "Cocok, calming dan ngebantu redain jerawat yang lagi meradang."
     ),
     "testimony_2": (
-        "Silmi (silmisyauz): Udah pakai ini dari tahun 2023. "
-        "Aku repurchase terus karena emang cocok banget buat kulit acne-prone ku. "
-        "Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
-        "Jerawat ku jauh lebih terkontrol sejak pakai ini."
+        "Silmi (silmisyauz): Udah pake ini dari tahun 2023, selalu repurchase karena cocok "
+        "banget sama kulitku yang acne-prone, bikin kulit jarang jerawat dan sehat, teksturnya "
+        "kayak ada scrub kecil tapi ga sakit sama sekali, busa nya ada tapi gak to much."
     ),
 }
 

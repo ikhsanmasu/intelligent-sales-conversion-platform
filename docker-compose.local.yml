@@ -1,5 +1,8 @@
+name: iscp-local
+
 services:
   postgres:
+    container_name: iscp-local-postgres
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
@@ -17,6 +20,7 @@ services:
       retries: 10
 
   backend:
+    container_name: iscp-local-backend
     build: ./backend
     ports:
       - "8002:8000"
@@ -27,6 +31,7 @@ services:
         condition: service_healthy
 
   frontend:
+    container_name: iscp-local-frontend
     build: ./frontend
     ports:
       - "3000:80"

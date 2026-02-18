@@ -1,5 +1,9 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
 from app.agents.database.router import router as database_router
 from app.agents.vector.router import router as vector_router
 from app.channels.telegram.router import router as telegram_channel_router
@@ -26,6 +30,10 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="Sales Agent API", lifespan=lifespan)
 
 setup_cors(app)
+
+_RESOURCE_DIR = Path(__file__).resolve().parents[1] / "resource"
+if _RESOURCE_DIR.is_dir():
+    app.mount("/v1/static/resource", StaticFiles(directory=str(_RESOURCE_DIR)), name="resource")
 
 app.include_router(chatbot_router)
 app.include_router(admin_router)

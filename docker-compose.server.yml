@@ -1,5 +1,8 @@
+name: iscp-server
+
 services:
   caddy:
+    container_name: iscp-server-caddy
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
@@ -14,6 +17,7 @@ services:
       - caddy_config_server:/config
 
   postgres:
+    container_name: iscp-server-postgres
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
@@ -31,6 +35,7 @@ services:
       retries: 10
 
   backend:
+    container_name: iscp-server-backend
     build: ./backend
     expose:
       - "8000"
@@ -41,6 +46,7 @@ services:
         condition: service_healthy
 
   frontend:
+    container_name: iscp-server-frontend
     build:
       context: ./frontend
       args:
