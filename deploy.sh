@@ -112,10 +112,12 @@ EOF
 
     case "${choice^^}" in
       A)
+        echo "[deploy] Pilihan A: Keep volumes (data tetap ada)." >&2
         echo "keep"
         return 0
         ;;
       B)
+        echo "[deploy] Pilihan B: Wipe volumes (hapus volume, data fresh)." >&2
         echo "wipe"
         return 0
         ;;
@@ -134,9 +136,11 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 
   case "${mode,,}" in
     keep|a)
+      echo "[deploy] Mode KEEP: container di-recreate tanpa menghapus volume."
       deploy_keep_volumes "${2:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${3:-$DEPLOY_PROJECT_NAME_DEFAULT}"
       ;;
     wipe|b)
+      echo "[deploy] Mode WIPE: container di-recreate dan volume dihapus dulu."
       deploy_reset_volumes "${2:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${3:-$DEPLOY_PROJECT_NAME_DEFAULT}"
       ;;
     help|-h|--help)
