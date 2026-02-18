@@ -12,3 +12,4 @@ dist/
 *.db-journal
 backend/data/
 .claude/
+deployment_note.md

@@ -9,6 +9,7 @@
 # You can also execute directly:
 #   bash deploy.sh keep
 #   bash deploy.sh wipe
+#   bash deploy.sh
 
 DEPLOY_COMPOSE_FILE_DEFAULT="docker-compose.server.yml"
 DEPLOY_PROJECT_NAME_DEFAULT="iscp-server"
@@ -30,6 +31,7 @@ Defaults:
 Direct execution:
   bash deploy.sh keep
   bash deploy.sh wipe
+  bash deploy.sh
 EOF
 }
 
@@ -97,13 +99,44 @@ deploy_reset_volumes() {
   _deploy_run "wipe" "$compose_file" "$project_name"
 }
 
+_deploy_select_mode_interactive() {
+  local choice=""
+
+  while true; do
+    cat <<'EOF'
+[deploy] Pilih mode deploy:
+  A) Keep volumes   (aman, data tetap ada)
+  B) Wipe volumes   (hapus volume, data fresh)
+EOF
+    read -r -p "Masukkan pilihan [A/B]: " choice
+
+    case "${choice^^}" in
+      A)
+        echo "keep"
+        return 0
+        ;;
+      B)
+        echo "wipe"
+        return 0
+        ;;
+      *)
+        echo "[deploy] Pilihan tidak valid. Harus A atau B."
+        ;;
+    esac
+  done
+}
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  mode="${1:-keep}"
-  case "$mode" in
-    keep)
+  mode="${1:-}"
+  if [[ -z "$mode" ]]; then
+    mode="$(_deploy_select_mode_interactive)"
+  fi
+
+  case "${mode,,}" in
+    keep|a)
       deploy_keep_volumes "${2:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${3:-$DEPLOY_PROJECT_NAME_DEFAULT}"
       ;;
-    wipe)
+    wipe|b)
       deploy_reset_volumes "${2:-$DEPLOY_COMPOSE_FILE_DEFAULT}" "${3:-$DEPLOY_PROJECT_NAME_DEFAULT}"
       ;;
     help|-h|--help)

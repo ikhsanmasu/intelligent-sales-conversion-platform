@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from app.channels.common import process_incoming_text
+from app.channels.common import natural_read_delay, process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
     get_testimony_images,
@@ -80,10 +80,22 @@ def _send_whatsapp_image(recipient: str, image_url: str, caption: str | None = N
     )
 
 
+def _mark_whatsapp_read(message_id: str) -> None:
+    """Mark message as read (double-tick) without showing typing."""
+    if not message_id:
+        return
+    _post_whatsapp_payload(
+        {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+        }
+    )
+
+
 def _send_whatsapp_typing_indicator(message_id: str) -> bool:
     if not message_id:
         return False
-
     _post_whatsapp_payload(
         {
             "messaging_product": "whatsapp",
@@ -164,6 +176,11 @@ def handle_webhook(payload: dict) -> dict:
                 if not sender or not body:
                     continue
 
+                try:
+                    _mark_whatsapp_read(inbound_message_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Failed to mark WhatsApp message as read: %s", exc)
+                time.sleep(natural_read_delay(body))
                 with _WhatsAppTypingHeartbeat(message_id=inbound_message_id):
                     result = process_incoming_text(
                         channel="whatsapp",

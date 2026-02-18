@@ -5,7 +5,7 @@ import time
 import httpx
 from fastapi import HTTPException
 
-from app.channels.common import process_incoming_text
+from app.channels.common import natural_read_delay, process_incoming_text
 from app.channels.media import (
     format_testimony_reply_text,
     get_testimony_images,
@@ -144,6 +144,7 @@ def handle_webhook(payload: dict, secret_header: str | None = None) -> dict:
         return {"status": "ignored", "detail": "No text message payload"}
 
     chat_id, text = extracted
+    time.sleep(natural_read_delay(text))
     with _TelegramTypingHeartbeat(chat_id=chat_id):
         result = process_incoming_text(
             channel="telegram",

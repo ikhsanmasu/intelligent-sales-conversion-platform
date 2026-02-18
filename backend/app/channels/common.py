@@ -2,6 +2,10 @@ from app.modules.chatbot.repository import ChatRepository
 from app.modules.chatbot.schemas import ChatRequest
 from app.modules.chatbot.service import chat, save_messages
 
+# Reading speed: ~200 wpm ≈ 1000 chars/min ≈ 17 chars/sec, capped 0.5–3.0s
+def natural_read_delay(text: str) -> float:
+    return min(3.0, max(0.5, len(str(text or "")) / 17))
+
 
 def _normalize_channel_user_id(channel: str, external_user_id: str) -> str:
     channel_key = (channel or "unknown").strip().lower()
