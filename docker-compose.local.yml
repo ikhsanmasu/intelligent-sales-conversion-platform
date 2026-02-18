@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
-      - .env.local
+      - .env
     volumes:
       - postgres_data_local:/var/lib/postgresql/data
     healthcheck:
@@ -21,7 +21,7 @@ services:
     ports:
       - "8002:8000"
     env_file:
-      - .env.local
+      - .env
     depends_on:
       postgres:
         condition: service_healthy

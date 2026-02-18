@@ -12,9 +12,11 @@ Chatbot sales berbasis AI untuk use case konversi penjualan produk skincare (sof
 - Informasi model AI per turn ditampilkan di UI (`provider/model`).
 
 ## Menjalankan Aplikasi (Docker)
+Pakai satu file env saja: `.env`.
+
 ### 1) Mode Local (tanpa Caddy)
 ```bash
-cp .env.local.example .env.local
+cp .env.example .env
 docker compose -f docker-compose.local.yml up -d --build
 ```
 
@@ -24,13 +26,13 @@ Akses local:
 
 ### 2) Mode Server (dengan Caddy reverse proxy)
 ```bash
-cp .env.server.example .env.server
+cp .env.example .env
 docker compose -f docker-compose.server.yml up -d --build
 ```
 
-Akses server default:
-- Frontend (via Caddy): `http://localhost`
-- Backend API (via Caddy): `http://localhost/v1`
+Akses server:
+- Frontend (via Caddy): `https://dashboard.isanmas.site`
+- Backend API (via Caddy): `https://api.isanmas.site/v1`
 
 ## Menjalankan Lokal Tanpa Docker
 ### Backend
@@ -88,15 +90,12 @@ Endpoint webhook:
 - WhatsApp verify: `GET /v1/channels/whatsapp/webhook`
 - WhatsApp events: `POST /v1/channels/whatsapp/webhook`
 
-### Setup Caddy Address
-Gunakan variabel ini untuk alamat/site production:
+### Setup Domain Server
+Pastikan DNS sudah diarahkan:
+- `dashboard.isanmas.site` -> IP server
+- `api.isanmas.site` -> IP server
 
-```env
-CADDY_SITE_ADDRESS=:80
-CADDY_HTTP_PORT=80
-CADDY_HTTPS_PORT=443
-CADDY_EMAIL=
-```
+Domain mapping dikonfigurasi langsung di `Caddyfile`.
 
 ## Catatan API Penting
 - Chat endpoint:

@@ -2,8 +2,6 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    env_file:
-      - .env.server
     depends_on:
       - frontend
       - backend
@@ -19,7 +17,7 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file:
-      - .env.server
+      - .env
     volumes:
       - postgres_data_server:/var/lib/postgresql/data
     healthcheck:
@@ -37,13 +35,16 @@ services:
     expose:
       - "8000"
     env_file:
-      - .env.server
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: https://api.isanmas.site
     expose:
       - "80"
     depends_on:

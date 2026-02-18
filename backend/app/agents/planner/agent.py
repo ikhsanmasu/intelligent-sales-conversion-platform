@@ -1,5 +1,6 @@
 import re
 from collections.abc import Generator
+from dataclasses import dataclass, field
 
 from app.agents.base import AgentResult, BaseAgent
 from app.core.config import settings
@@ -7,7 +8,10 @@ from app.core.llm.base import BaseLLM
 from app.core.llm.schemas import GenerateConfig
 from app.modules.admin.service import resolve_config, resolve_prompt
 
-PRODUCT_KNOWLEDGE = """Produk yang kamu jual:
+# ---------------------------------------------------------------------------
+# Product Knowledge — full version (injected conditionally by stage)
+# ---------------------------------------------------------------------------
+PRODUCT_KNOWLEDGE_FULL = """Produk yang kamu jual:
 - Nama: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP)
 - Harga: Rp110.900
 - Kemasan: 60 g
@@ -44,109 +48,315 @@ Ketentuan pengiriman dan komplain:
 
 Testimoni:
 1) Amanda (amandabilla98):
-   "Oke banget sih buat perawatan jerawat... calming dan ngebantu redain jerawat meradang."
+   "Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash buat acne care!"
 2) Silmi (silmisyauz):
-   "Udah pake ini dari tahun 2023, repurchase terus karena cocok untuk acne-prone..."
+   "Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. Jerawat ku jauh lebih terkontrol sejak pakai ini."
 """
 
-BASE_SYSTEM_PROMPT = """Kamu adalah chatbot sales Mengantar yang fokus high-conversion tapi tetap natural, empatik,
-dan tidak memaksa.
+PRODUCT_KNOWLEDGE_BRIEF = (
+    "Produk: ERHA Acneact Acne Cleanser Scrub Beta Plus (ACSBP) — "
+    "sabun pembersih wajah untuk kulit berjerawat/berminyak, Rp110.900/60g."
+)
 
-Karakter dan aturan:
-- Bahasa Indonesia santai, ramah, kekinian, tetap sopan.
-- Fokus menyelesaikan masalah user dulu, baru ajakan beli secara halus.
-- Gunakan struktur persuasi: empati/cerita singkat -> manfaat relevan -> ajakan lembut.
-- Jangan mengarang data di luar informasi produk yang tersedia.
-- Jika data tidak ada, jujur dan arahkan dengan pertanyaan klarifikasi.
-- Jangan memberi klaim medis berlebihan atau janji pasti sembuh.
-- Buat jawaban ringkas, praktis, dan enak dibaca.
-- Setiap jawaban sebaiknya diakhiri pertanyaan lanjutan/CTA halus.
-
-Tahap percakapan yang harus kamu ikuti:
-1. Sapa pembeli
-2. Pembukaan
-3. Konsultasi (gali kebutuhan/masalah)
-4. Testimoni (bukti sosial natural)
-5. Promo (dorongan beli relevan tanpa klaim promo palsu)
-6. Closing (ajak transaksi secara soft-selling)
-7. Kalimat penutup yang hangat
-
-Untuk tahap promo:
-- Jika tidak ada info promo nominal, jangan membuat angka diskon fiktif.
-- Boleh dorong aksi seperti cek promo ongkir/benefit berdasarkan lokasi.
-
-Target psikologis user:
-- Remaja/dewasa dengan kulit berjerawat atau berminyak
-- Trigger: ingin lebih percaya diri, lelah coba produk yang tidak cocok
-
+# ---------------------------------------------------------------------------
+# Base System Prompt — streamlined
+# ---------------------------------------------------------------------------
+BASE_SYSTEM_PROMPT = """Kamu adalah chatbot sales skincare yang empatik dan natural.
+Gunakan bahasa Indonesia santai-sopan, fokus bantu masalah user dulu.
+Gunakan pola: empati -> manfaat relevan -> ajakan lembut.
+Jangan mengarang data, jangan klaim medis berlebihan, jangan promo palsu.
+Jawaban ringkas (2-4 paragraf pendek) dan tutup dengan pertanyaan lanjutan/CTA halus.
 """
 
-STAGE_GUIDANCE = {
-    "greeting": "Sapa user dengan hangat dan personal. Bangun koneksi awal.",
-    "opening": "Kenalkan produk secara singkat dan bangkitkan minat tanpa hard-sell.",
-    "consultation": "Gali masalah kulit user dan hubungkan manfaat produk yang relevan.",
-    "testimony": "Sisipkan testimoni paling relevan secara natural sebagai bukti sosial.",
-    "promo": (
-        "Berikan dorongan beli yang relevan (misalnya cek benefit kirim/promo sesuai lokasi), "
-        "tanpa membuat klaim promo palsu."
-    ),
-    "closing": "Arahkan ke transaksi dengan ajakan lembut dan langkah yang jelas.",
-    "farewell": "Tutup percakapan dengan hangat, positif, dan tetap membuka bantuan lanjutan.",
+# ---------------------------------------------------------------------------
+# Rich Stage Prompts
+# ---------------------------------------------------------------------------
+STAGE_PROMPTS = {
+    "greeting": {
+        "instruction": (
+            "- Sapa user dengan hangat dan personal, tanyakan kabar atau nama.\n"
+            "- Bangun koneksi awal: tunjukkan kamu siap membantu.\n"
+            "- JANGAN langsung menyebut produk atau jualan."
+        ),
+        "tone": "Hangat, bersahabat, seperti teman yang baru kenalan.",
+        "emotional_hook": "Buat user merasa disambut dan nyaman untuk curhat.",
+        "do_not": "Jangan sebut nama produk, harga, atau manfaat apapun di tahap ini.",
+        "example_pattern": (
+            "Haii! Selamat datang~ Seneng banget kamu mampir. "
+            "Btw, boleh tau nama kamu siapa? Biar ngobrolnya lebih asik~"
+        ),
+        "transition_trigger": "User merespons sapaan / menyebut nama / menyebut masalah kulit.",
+        "response_length": "1-2 kalimat saja. Singkat dan hangat.",
+    },
+    "opening": {
+        "instruction": (
+            "- Kenalkan dirimu sebagai beauty advisor yang bisa bantu soal skincare.\n"
+            "- Tanyakan masalah kulit user secara empatik.\n"
+            "- Boleh menyebut bahwa kamu punya rekomendasi produk, tapi jangan detail dulu."
+        ),
+        "tone": "Antusias tapi tidak agresif, penuh perhatian.",
+        "emotional_hook": "Validasi bahwa masalah kulit itu wajar dan bisa diatasi.",
+        "do_not": "Jangan langsung sebut nama produk atau harga.",
+        "example_pattern": (
+            "Wah, seneng kenalan sama kamu! Aku di sini bisa bantu soal skincare lho. "
+            "Btw, ada keluhan kulit yang lagi ganggu nggak? Cerita aja, siapa tau aku bisa bantu~"
+        ),
+        "transition_trigger": "User menceritakan masalah kulit / bertanya soal produk.",
+        "response_length": "2-3 kalimat. Perkenalan singkat + 1 pertanyaan.",
+    },
+    "consultation": {
+        "instruction": (
+            "- Gali masalah kulit user lebih dalam: tipe kulit, sudah coba apa, hasilnya bagaimana.\n"
+            "- Tunjukkan empati: validasi perasaan user soal masalah kulitnya.\n"
+            "- Hubungkan masalah user dengan manfaat produk yang RELEVAN.\n"
+            "- Jelaskan kandungan (BHA, Sulphur, Scrub biodegradable) dan cara kerjanya.\n"
+            "- Jangan overselling — fokus edukasi."
+        ),
+        "tone": "Seperti konsultan kecantikan yang sabar dan berpengetahuan.",
+        "emotional_hook": "Buat user merasa masalahnya dipahami dan ada solusinya.",
+        "do_not": "Jangan buat klaim medis pasti ('pasti sembuh', 'dijamin hilang'). Gunakan 'membantu', 'bisa bantu'.",
+        "example_pattern": (
+            "Hmm, jerawat meradang emang bikin nggak nyaman ya :( Aku paham banget. "
+            "Nah, biasanya jerawat kayak gitu butuh pembersih yang bisa kontrol minyak sekaligus antibakteri. "
+            "Kebetulan ERHA ACSBP ini ada kandungan BHA dan Sulphur yang membantu banget buat itu..."
+        ),
+        "transition_trigger": "User sudah paham manfaat produk / tertarik / minta bukti.",
+        "response_length": "3-5 kalimat. Empati + edukasi produk, jangan terlalu panjang.",
+    },
+    "testimony": {
+        "instruction": (
+            "- KUTIP PERSIS KATA PER KATA testimoni di bawah. JANGAN UBAH, JANGAN PARAFRASE, JANGAN SINGKAT.\n"
+            "- Hubungkan testimoni dengan masalah spesifik user.\n"
+            "- Gunakan format @username untuk kredibilitas.\n"
+            "- Boleh tambahkan konteks singkat sebelum/sesudah kutipan.\n\n"
+            "TESTIMONI VERBATIM (wajib dikutip persis):\n\n"
+            "1) @amandabilla98 (Amanda):\n"
+            "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget "
+            "redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash "
+            "buat acne care!\"\n\n"
+            "2) @silmisyauz (Silmi):\n"
+            "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat "
+            "kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
+            "Jerawat ku jauh lebih terkontrol sejak pakai ini.\""
+        ),
+        "tone": "Antusias berbagi cerita sukses, seperti kasih rekomendasi ke teman.",
+        "emotional_hook": "Social proof — orang lain dengan masalah serupa sudah terbantu.",
+        "do_not": "DILARANG mengubah, menyingkat, atau memparafrase testimoni. Kutip PERSIS.",
+        "example_pattern": (
+            "Oh iya, ada yang ceritanya mirip kayak kamu nih!\n\n"
+            "@amandabilla98 (Amanda) bilang:\n"
+            "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan ngebantu banget "
+            "redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi nyari facial wash "
+            "buat acne care!\"\n\n"
+            "Terus @silmisyauz (Silmi) juga bilang:\n"
+            "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang cocok banget buat "
+            "kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
+            "Jerawat ku jauh lebih terkontrol sejak pakai ini.\"\n\n"
+            "Relatable kan?"
+        ),
+        "transition_trigger": "User tertarik / mau tau harga / mau beli.",
+        "response_length": "Kutip KEDUA testimoni LENGKAP + 1-2 kalimat konteks. Jangan potong.",
+    },
+    "promo": {
+        "instruction": (
+            "- Sampaikan harga produk: Rp110.900 untuk 60g.\n"
+            "- Berikan dorongan beli yang relevan tanpa klaim promo palsu.\n"
+            "- Boleh suggest: cek promo ongkir, benefit berdasarkan lokasi.\n"
+            "- Tekankan value: harga terjangkau untuk produk BPOM + Halal.\n"
+            "- Frame sebagai investasi untuk kulit, bukan pengeluaran."
+        ),
+        "tone": "Excited tapi jujur, seperti kasih info deal bagus ke teman.",
+        "emotional_hook": "FOMO halus — 'sayang kalau nggak dicoba' tanpa tekanan.",
+        "do_not": "Jangan buat angka diskon fiktif atau promo yang tidak ada.",
+        "example_pattern": (
+            "Nah, kabar baiknya harganya cuma Rp110.900 aja lho untuk 60g! "
+            "Udah BPOM dan Halal MUI juga. Worth it banget sih buat investasi kulit sehat. "
+            "Mau aku bantu proses pesanannya?"
+        ),
+        "transition_trigger": "User bilang mau beli / minta cara order.",
+        "response_length": "3-4 kalimat. Harga + value proposition + CTA.",
+    },
+    "closing": {
+        "instruction": (
+            "- Berikan instruksi order yang JELAS dan langkah-langkah konkret.\n"
+            "- Minta alamat lengkap untuk pengiriman.\n"
+            "- Infokan kebijakan komplain: wajib video unboxing tanpa putus.\n"
+            "- Buat user merasa keputusannya tepat (reinforcement positif).\n"
+            "- Jika user ragu, handle objection dengan empati."
+        ),
+        "tone": "Supportive dan clear, seperti bantu teman checkout.",
+        "emotional_hook": "Reinforcement — 'pilihan bagus, kulit kamu pasti seneng!'",
+        "do_not": "Jangan skip info kebijakan komplain.",
+        "example_pattern": (
+            "Yay, pilihan bagus! Biar aku bantu ya. Untuk prosesnya:\n"
+            "1. Kirim alamat lengkap kamu\n"
+            "2. Nanti aku info total + ongkirnya\n"
+            "Oh iya, satu hal penting: kalau nanti ada kendala, pastikan rekam video unboxing "
+            "tanpa putus ya, karena itu syarat untuk proses komplain."
+        ),
+        "transition_trigger": "User konfirmasi order / kirim alamat.",
+        "response_length": "4-6 kalimat. Langkah order + kebijakan komplain.",
+    },
+    "farewell": {
+        "instruction": (
+            "- Tutup percakapan dengan hangat dan PERSONAL.\n"
+            "- Sebutkan kembali masalah/kekhawatiran spesifik user dari percakapan (misal: jerawat meradang, kulit berminyak).\n"
+            "- Referensikan perjalanan percakapan (misal: 'seneng bisa bantu kamu soal jerawat tadi').\n"
+            "- Ucapkan terima kasih.\n"
+            "- Buka pintu untuk konsultasi lanjutan di masa depan.\n"
+            "- Jika sudah order: ingatkan soal video unboxing."
+        ),
+        "tone": "Hangat dan caring, seperti pamitan sama teman yang udah curhat.",
+        "emotional_hook": "Buat user merasa dihargai secara personal, bukan template.",
+        "do_not": "Jangan hard-sell di tahap ini. Jangan pakai template generik tanpa referensi percakapan.",
+        "example_pattern": (
+            "Makasih ya udah cerita soal masalah jerawatnya! Semoga ERHA ACSBP-nya bisa bantu "
+            "redain jerawat kamu yang lagi meradang itu. Kalau nanti ada pertanyaan lagi soal "
+            "skincare, jangan sungkan chat aku ya~ Semangat!"
+        ),
+        "transition_trigger": "",
+        "response_length": "2-3 kalimat. Personal, singkat, dan hangat.",
+    },
 }
 
+# ---------------------------------------------------------------------------
+# Intent keywords
+# ---------------------------------------------------------------------------
 ORDER_INTENT_KEYWORDS = {
-    "beli",
-    "checkout",
-    "co",
-    "ambil",
-    "pesan",
-    "order",
-    "gas",
-    "lanjut",
+    "beli", "checkout", "co", "ambil", "pesan", "order", "gas", "lanjut",
 }
-
 PROMO_KEYWORDS = {
-    "promo",
-    "diskon",
-    "ongkir",
-    "gratis ongkir",
-    "voucher",
-    "harga",
-    "murah",
+    "promo", "diskon", "ongkir", "gratis ongkir", "voucher", "harga", "murah",
+    "berapa", "harganya",
 }
-
 TESTIMONY_KEYWORDS = {
-    "testimoni",
-    "review",
-    "bukti",
-    "cocok gak",
-    "aman gak",
-    "yakin",
+    "testimoni", "review", "bukti", "pengalaman", "real",
 }
-
 CONSULTATION_KEYWORDS = {
-    "jerawat",
-    "berminyak",
-    "bruntusan",
-    "kusam",
-    "iritasi",
-    "komedo",
-    "sensitif",
+    "jerawat", "berminyak", "bruntusan", "kusam", "iritasi", "komedo", "sensitif",
 }
-
 FAREWELL_KEYWORDS = {
-    "makasih",
-    "terima kasih",
-    "thanks",
-    "oke sip",
-    "dadah",
-    "bye",
+    "makasih", "terima kasih", "thanks", "oke sip", "dadah", "bye",
 }
 
+# Short keywords (≤3 chars) that need word-boundary matching to avoid false positives
+_SHORT_KEYWORDS = {"co", "gas", "bye"}
 
+# Product knowledge tiers: None / Brief / Full
+_KNOWLEDGE_NONE_STAGES = {"greeting", "farewell"}
+_KNOWLEDGE_BRIEF_STAGES = {"opening", "testimony", "promo", "closing"}
+# All other stages get full knowledge
+
+# Ordered stages for progression
+_STAGE_ORDER = ["greeting", "opening", "consultation", "testimony", "promo", "closing", "farewell"]
+
+_MAX_HISTORY_MESSAGES = 4
+
+_STAGE_COMPACT_GUIDANCE = {
+    "greeting": "Sapa hangat, jangan jualan, 1-2 kalimat.",
+    "opening": "Validasi masalah user dan ajak cerita singkat.",
+    "consultation": "Empati + edukasi manfaat relevan. Hindari klaim medis berlebihan.",
+    "testimony": "Berikan 1 testimoni paling relevan. Berikan testimoni kedua hanya jika diminta.",
+    "promo": "Sebut harga real, dorong cek ongkir/benefit sesuai lokasi, tanpa promo palsu.",
+    "closing": "Beri langkah order jelas dan ingatkan video unboxing.",
+    "farewell": "Tutup hangat dan personal, tanpa hard-selling.",
+}
+
+_TESTIMONIAL_QUOTES = [
+    (
+        "@amandabilla98 (Amanda): "
+        "\"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, dan "
+        "ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it "
+        "buat yang lagi nyari facial wash buat acne care!\""
+    ),
+    (
+        "@silmisyauz (Silmi): "
+        "\"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang "
+        "cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga "
+        "halus, jadi nggak bikin iritasi. Jerawat ku jauh lebih terkontrol "
+        "sejak pakai ini.\""
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Conversation State
+# ---------------------------------------------------------------------------
+@dataclass
+class ConversationState:
+    """Tracks which stages have been covered in conversation history."""
+    covered_stages: set[str] = field(default_factory=set)
+    current_intent: str = "general"
+    resolved_stage: str = "greeting"
+
+
+# ---------------------------------------------------------------------------
+# ThinkFilter — streaming state machine for <think> tags
+# ---------------------------------------------------------------------------
+class ThinkFilter:
+    """Filters out <think>...</think> blocks from a token stream."""
+
+    def __init__(self):
+        self._inside_think = False
+        self._buffer = ""
+
+    def feed(self, token: str) -> str:
+        """Feed a token, return filtered output (may be empty)."""
+        self._buffer += token
+        output = []
+
+        while self._buffer:
+            if self._inside_think:
+                end_idx = self._buffer.find("</think>")
+                if end_idx != -1:
+                    self._buffer = self._buffer[end_idx + len("</think>"):]
+                    self._inside_think = False
+                else:
+                    # Could be partial tag — keep buffering
+                    if len(self._buffer) > 500:
+                        self._buffer = self._buffer[-20:]
+                    break
+            else:
+                start_idx = self._buffer.find("<think>")
+                if start_idx != -1:
+                    output.append(self._buffer[:start_idx])
+                    self._buffer = self._buffer[start_idx + len("<think>"):]
+                    self._inside_think = True
+                elif "<" in self._buffer and not self._buffer.endswith(">"):
+                    # Possible partial <think> tag — flush safe part
+                    last_lt = self._buffer.rfind("<")
+                    tail = self._buffer[last_lt:]
+                    if "<think>"[:len(tail)] == tail:
+                        output.append(self._buffer[:last_lt])
+                        self._buffer = tail
+                        break
+                    else:
+                        output.append(self._buffer)
+                        self._buffer = ""
+                else:
+                    output.append(self._buffer)
+                    self._buffer = ""
+
+        return "".join(output)
+
+    def flush(self) -> str:
+        """Flush remaining buffer."""
+        if self._inside_think:
+            self._buffer = ""
+            return ""
+        out = self._buffer
+        self._buffer = ""
+        return out
+
+
+# ---------------------------------------------------------------------------
+# PlannerAgent
+# ---------------------------------------------------------------------------
 class PlannerAgent(BaseAgent):
     def __init__(self, llm: BaseLLM):
         super().__init__(llm)
+
+    # -- Utility ----------------------------------------------------------
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
@@ -156,7 +366,6 @@ class PlannerAgent(BaseAgent):
     def _estimate_tokens(text: str) -> int:
         if not text:
             return 0
-        # Rough fallback: ~1 token per 4 chars for Latin text.
         return max(1, round(len(text) / 4))
 
     def _normalize_usage(self, raw_usage: dict, prompt_text: str, output_text: str) -> dict:
@@ -213,42 +422,174 @@ class PlannerAgent(BaseAgent):
 
         return str(provider), str(model)
 
-    def _detect_stage(self, input_text: str, history: list[dict] | None = None) -> str:
-        message = input_text.lower()
-        history = history or []
-        user_turns = [m for m in history if m.get("role") == "user"]
+    # -- Stage Detection (hybrid) -----------------------------------------
 
-        if any(keyword in message for keyword in FAREWELL_KEYWORDS):
+    @staticmethod
+    def _match_keywords(message: str, keywords: set[str]) -> bool:
+        """Match keywords against message. Short keywords (≤3 chars) use
+        word-boundary regex to prevent substring false-positives
+        (e.g. 'co' must not match 'cocok')."""
+        for kw in keywords:
+            if kw in _SHORT_KEYWORDS:
+                if re.search(rf"\b{re.escape(kw)}\b", message):
+                    return True
+            else:
+                if kw in message:
+                    return True
+        return False
+
+    @staticmethod
+    def _detect_intent(input_text: str) -> str:
+        """Detect the user's current intent from their message."""
+        message = input_text.lower()
+
+        if PlannerAgent._match_keywords(message, FAREWELL_KEYWORDS):
+            return "farewell"
+        if PlannerAgent._match_keywords(message, ORDER_INTENT_KEYWORDS):
+            return "order"
+        if PlannerAgent._match_keywords(message, PROMO_KEYWORDS):
+            return "price"
+        if PlannerAgent._match_keywords(message, TESTIMONY_KEYWORDS):
+            return "testimony"
+        if PlannerAgent._match_keywords(message, CONSULTATION_KEYWORDS):
+            return "skin_concern"
+        return "general"
+
+    @staticmethod
+    def _build_state(history: list[dict] | None) -> ConversationState:
+        """Scan conversation history to determine which stages have been covered."""
+        state = ConversationState()
+        history = history or []
+
+        assistant_messages = [
+            m.get("content", "").lower()
+            for m in history
+            if m.get("role") == "assistant"
+        ]
+        all_text = " ".join(assistant_messages)
+
+        if not assistant_messages:
+            return state
+
+        # Check covered stages by content analysis
+        # Greeting: assistant has greeted (require greeting-specific phrases)
+        greet_signals = ["selamat datang", "seneng banget kamu mampir", "kenalan dulu", "boleh tau nama"]
+        if any(s in all_text for s in greet_signals):
+            state.covered_stages.add("greeting")
+
+        # Opening: assistant introduced self as advisor / asked about skin
+        opening_signals = ["beauty advisor", "bantu soal skincare", "ada keluhan kulit", "masalah kulit"]
+        if any(s in all_text for s in opening_signals):
+            state.covered_stages.add("opening")
+
+        # Consultation: discussed product ingredients with product context
+        _product_terms = {"erha", "acsbp", "acneact", "produk"}
+        _ingredient_terms = {"bha", "sulphur", "scrub biodegradable"}
+        has_product = any(t in all_text for t in _product_terms)
+        has_ingredient = any(t in all_text for t in _ingredient_terms)
+        consult_signals = ["membersihkan pori", "minyak berlebih", "menghambat bakteri"]
+        if (has_product and has_ingredient) or any(s in all_text for s in consult_signals):
+            state.covered_stages.add("consultation")
+
+        # Testimony: shared actual testimonials (require username mentions)
+        testi_signals = ["amandabilla98", "silmisyauz", "@amandabilla", "@silmisyauz"]
+        if any(s in all_text for s in testi_signals):
+            state.covered_stages.add("testimony")
+
+        # Promo: mentioned specific price
+        promo_signals = ["110.900", "110900", "rp110"]
+        if any(s in all_text for s in promo_signals):
+            state.covered_stages.add("promo")
+
+        # Closing: gave order instructions
+        closing_signals = ["alamat lengkap", "proses pesanan", "video unboxing"]
+        if any(s in all_text for s in closing_signals):
+            state.covered_stages.add("closing")
+
+        return state
+
+    @staticmethod
+    def _resolve_stage(intent: str, state: ConversationState) -> str:
+        """Combine intent + state and keep progression coherent."""
+        if intent == "farewell":
             return "farewell"
 
-        if any(keyword in message for keyword in ORDER_INTENT_KEYWORDS):
+        if intent == "order":
+            if "consultation" not in state.covered_stages:
+                return "consultation"
+            if "promo" not in state.covered_stages:
+                return "promo"
             return "closing"
 
-        if any(keyword in message for keyword in PROMO_KEYWORDS):
+        if intent == "price":
+            if "consultation" not in state.covered_stages:
+                return "consultation"
             return "promo"
 
-        if any(keyword in message for keyword in TESTIMONY_KEYWORDS):
+        if intent == "testimony":
+            if "consultation" not in state.covered_stages:
+                return "consultation"
             return "testimony"
 
-        if any(keyword in message for keyword in CONSULTATION_KEYWORDS):
+        if intent == "skin_concern":
             return "consultation"
 
-        if not user_turns:
-            return "greeting"
-
-        if len(user_turns) == 1:
-            return "opening"
-
-        if len(user_turns) == 2:
-            return "consultation"
-
-        if len(user_turns) == 3:
-            return "testimony"
-
-        if len(user_turns) == 4:
-            return "promo"
+        for stage in _STAGE_ORDER:
+            if stage not in state.covered_stages:
+                return stage
 
         return "closing"
+
+    def _analyze_conversation(
+        self, input_text: str, history: list[dict] | None
+    ) -> tuple[str, ConversationState]:
+        """Full conversation analysis: returns (stage, state)."""
+        intent = self._detect_intent(input_text)
+        state = self._build_state(history)
+        state.current_intent = intent
+        stage = self._resolve_stage(intent, state)
+        state.resolved_stage = stage
+        return stage, state
+
+    # -- Message Building -------------------------------------------------
+
+    @staticmethod
+    def _trim_history(history: list[dict] | None, max_messages: int = _MAX_HISTORY_MESSAGES) -> list[dict]:
+        if not history:
+            return []
+        normalized = [
+            {"role": h.get("role", ""), "content": str(h.get("content", ""))}
+            for h in history
+            if h.get("role") in {"user", "assistant"} and str(h.get("content", "")).strip()
+        ]
+        if len(normalized) <= max_messages:
+            return normalized
+        return normalized[-max_messages:]
+
+    @staticmethod
+    def _build_compact_stage_block(stage: str, input_text: str) -> str:
+        guidance = _STAGE_COMPACT_GUIDANCE.get(stage, _STAGE_COMPACT_GUIDANCE["consultation"])
+        lines = [
+            f"TAHAP_AKTIF={stage}",
+            f"ATURAN_TAHAP={guidance}",
+            "FORMAT=Ringkas, 2-4 paragraf pendek, bahasa Indonesia santai sopan.",
+            "WAJIB=Selalu tutup dengan pertanyaan lanjutan atau CTA halus.",
+        ]
+
+        if stage == "testimony":
+            message = input_text.lower()
+            ask_for_many = any(token in message for token in {"dua", "2", "lebih banyak", "lainnya", "lagi"})
+            selected_quotes = _TESTIMONIAL_QUOTES[:2] if ask_for_many else _TESTIMONIAL_QUOTES[:1]
+            lines.append("TESTIMONI_VERBATIM:")
+            lines.extend(f"- {quote}" for quote in selected_quotes)
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _generation_config_for_stage(stage: str) -> GenerateConfig:
+        return GenerateConfig(
+            temperature=0.45,
+        )
 
     def _build_messages(
         self,
@@ -262,21 +603,34 @@ class PlannerAgent(BaseAgent):
         database_context = context.get("database_context")
         vector_context = context.get("vector_context")
 
-        stage_instruction = STAGE_GUIDANCE.get(stage, STAGE_GUIDANCE["consultation"])
-        sales_prompt_template = resolve_prompt("sales_system") or BASE_SYSTEM_PROMPT
-        try:
-            sales_prompt = sales_prompt_template.format(
-                stage=stage,
-                stage_instruction=stage_instruction,
-            )
-        except Exception:
-            sales_prompt = sales_prompt_template
-        system_prompt = (
-            f"{sales_prompt}\n\n"
-            f"Tahap aktif saat ini: {stage}\n"
-            f"Instruksi tahap: {stage_instruction}\n\n"
-            f"{PRODUCT_KNOWLEDGE}"
-        )
+        stage_block = self._build_compact_stage_block(stage=stage, input_text=input_text)
+        sales_prompt_template = resolve_prompt("sales_system") or ""
+        sales_prompt = ""
+        if sales_prompt_template:
+            try:
+                sales_prompt = sales_prompt_template.format(
+                    stage=stage,
+                    stage_instruction=_STAGE_COMPACT_GUIDANCE.get(stage, ""),
+                )
+                # Admin prompt override can be very long; clamp to keep token budget healthy.
+                sales_prompt = " ".join(str(sales_prompt).split())[:500]
+            except Exception:
+                sales_prompt = ""
+
+        if stage in _KNOWLEDGE_NONE_STAGES:
+            product_block = ""
+        elif stage in _KNOWLEDGE_BRIEF_STAGES:
+            product_block = PRODUCT_KNOWLEDGE_BRIEF
+        else:
+            product_block = PRODUCT_KNOWLEDGE_FULL
+
+        parts = [BASE_SYSTEM_PROMPT]
+        if sales_prompt:
+            parts.append(sales_prompt)
+        parts.append(stage_block)
+        if product_block:
+            parts.append(product_block)
+        system_prompt = "\n\n".join(parts)
 
         messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
 
@@ -284,10 +638,7 @@ class PlannerAgent(BaseAgent):
             messages.append(
                 {
                     "role": "system",
-                    "content": (
-                        "Ringkasan preferensi/fakta user dari percakapan sebelumnya:\n"
-                        f"{memory_summary}"
-                    ),
+                    "content": f"Ringkasan user sebelumnya:\n{str(memory_summary)[:500]}",
                 }
             )
 
@@ -295,10 +646,7 @@ class PlannerAgent(BaseAgent):
             messages.append(
                 {
                     "role": "system",
-                    "content": (
-                        "Fakta terstruktur dari Database Agent (prioritaskan jika relevan):\n"
-                        f"{database_context}"
-                    ),
+                    "content": f"Konteks database relevan:\n{str(database_context)[:700]}",
                 }
             )
 
@@ -306,18 +654,15 @@ class PlannerAgent(BaseAgent):
             messages.append(
                 {
                     "role": "system",
-                    "content": (
-                        "Konteks retrieval dari Vector Agent (gunakan untuk memperkaya jawaban):\n"
-                        f"{vector_context}"
-                    ),
+                    "content": f"Konteks retrieval relevan:\n{str(vector_context)[:700]}",
                 }
             )
 
-        if history:
-            messages.extend(history)
-
+        messages.extend(self._trim_history(history))
         messages.append({"role": "user", "content": input_text})
         return messages
+
+    # -- Execute (blocking) -----------------------------------------------
 
     def execute(
         self,
@@ -325,7 +670,7 @@ class PlannerAgent(BaseAgent):
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> AgentResult:
-        stage = self._detect_stage(input_text, history=history)
+        stage, _state = self._analyze_conversation(input_text, history=history)
         messages = self._build_messages(
             input_text=input_text,
             stage=stage,
@@ -335,7 +680,7 @@ class PlannerAgent(BaseAgent):
 
         response = self.llm.generate(
             messages=messages,
-            config=GenerateConfig(temperature=0.6),
+            config=self._generation_config_for_stage(stage),
         )
 
         output_text = self._strip_think_tags(response.text)
@@ -357,23 +702,71 @@ class PlannerAgent(BaseAgent):
             },
         )
 
+    # -- Execute Stream (true streaming) ----------------------------------
+
     def execute_stream(
         self,
         input_text: str,
         context: dict | None = None,
         history: list[dict] | None = None,
     ) -> Generator[dict, None, None]:
-        result = self.execute(input_text=input_text, context=context, history=history)
+        stage, _state = self._analyze_conversation(input_text, history=history)
+        messages = self._build_messages(
+            input_text=input_text,
+            stage=stage,
+            history=history,
+            context=context,
+        )
 
-        stage = result.metadata.get("stage", "consultation")
         yield {"type": "thinking", "content": f"Tahap percakapan: {stage}\n"}
 
-        text = result.output or ""
-        if not text:
-            yield {"type": "content", "content": "Maaf, belum ada jawaban. Bisa diulang dengan detail kebutuhan kamu?"}
-        else:
-            chunk_size = 180
-            for idx in range(0, len(text), chunk_size):
-                yield {"type": "content", "content": text[idx : idx + chunk_size]}
+        think_filter = ThinkFilter()
+        full_output = []
+        prompt_text = "\n".join(str(m.get("content", "")) for m in messages)
+        has_content = False
 
-        yield {"type": "meta", "metadata": result.metadata}
+        try:
+            for token in self.llm.generate_stream(
+                messages=messages,
+                config=self._generation_config_for_stage(stage),
+            ):
+                filtered = think_filter.feed(token)
+                if filtered:
+                    has_content = True
+                    full_output.append(filtered)
+                    yield {"type": "content", "content": filtered}
+
+            # Flush any remaining buffer
+            remaining = think_filter.flush()
+            if remaining:
+                has_content = True
+                full_output.append(remaining)
+                yield {"type": "content", "content": remaining}
+
+        except Exception:
+            if not has_content:
+                yield {
+                    "type": "content",
+                    "content": "Maaf, belum ada jawaban. Bisa diulang dengan detail kebutuhan kamu?",
+                }
+
+        if not has_content:
+            yield {
+                "type": "content",
+                "content": "Maaf, belum ada jawaban. Bisa diulang dengan detail kebutuhan kamu?",
+            }
+
+        output_text = "".join(full_output)
+        usage = self._normalize_usage({}, prompt_text=prompt_text, output_text=output_text)
+        provider, model = self._resolve_llm_identity()
+
+        yield {
+            "type": "meta",
+            "metadata": {
+                "agent": "sales",
+                "stage": stage,
+                "model": {"provider": provider, "name": model},
+                "usage": usage,
+            },
+        }
+

@@ -26,10 +26,15 @@ DEFAULT_PRODUCT = {
         "Tanpa video unboxing, komplain tidak diproses."
     ),
     "testimony_1": (
-        "Amanda: cocok, calming, bantu redakan jerawat meradang."
+        "Amanda (amandabilla98): Oke banget sih buat perawatan jerawat. "
+        "Dia tuh lembut, calming, dan ngebantu banget redain jerawat yang lagi meradang. "
+        "Pokoknya worth it buat yang lagi nyari facial wash buat acne care!"
     ),
     "testimony_2": (
-        "Silmi: repurchase sejak 2023, cocok untuk acne-prone."
+        "Silmi (silmisyauz): Udah pakai ini dari tahun 2023. "
+        "Aku repurchase terus karena emang cocok banget buat kulit acne-prone ku. "
+        "Busanya lembut, scrubnya juga halus, jadi nggak bikin iritasi. "
+        "Jerawat ku jauh lebih terkontrol sejak pakai ini."
     ),
 }
 
@@ -40,6 +45,12 @@ def ensure_default_sales_product() -> None:
             select(SalesProduct).where(SalesProduct.sku == DEFAULT_PRODUCT["sku"])
         ).first()
         if existing:
+            # Update existing record with latest data (e.g. full testimonials)
+            for key, value in DEFAULT_PRODUCT.items():
+                if key != "sku":
+                    setattr(existing, key, value)
+            session.add(existing)
+            session.commit()
             return
         session.add(SalesProduct(**DEFAULT_PRODUCT))
         session.commit()

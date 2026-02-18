@@ -32,7 +32,11 @@ class OpenAICompatibleProvider(BaseLLM):
             "top_p": config.top_p,
         }
         if config.max_tokens is not None:
-            params["max_tokens"] = config.max_tokens
+            model_name = (self._model or "").lower()
+            if model_name.startswith("gpt-5") or model_name.startswith("o"):
+                params["max_completion_tokens"] = config.max_tokens
+            else:
+                params["max_tokens"] = config.max_tokens
         if config.stop is not None:
             params["stop"] = config.stop
         return params

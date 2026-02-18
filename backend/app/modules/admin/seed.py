@@ -50,8 +50,12 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
             "Cara pakai: basahi wajah, aplikasikan dan pijat lembut, bilas bersih, gunakan 2-3 kali sehari.\n\n"
             "Ketentuan komplain: wajib video unboxing tanpa putus; tanpa video unboxing komplain tidak diproses.\n\n"
             "Testimoni:\n"
-            "- Amanda (amandabilla98): cocok, calming, bantu redakan jerawat meradang.\n"
-            "- Silmi (silmisyauz): repurchase sejak 2023, cocok untuk acne-prone."
+            "- Amanda (amandabilla98): \"Oke banget sih buat perawatan jerawat. Dia tuh lembut, calming, "
+            "dan ngebantu banget redain jerawat yang lagi meradang. Pokoknya worth it buat yang lagi "
+            "nyari facial wash buat acne care!\"\n"
+            "- Silmi (silmisyauz): \"Udah pakai ini dari tahun 2023. Aku repurchase terus karena emang "
+            "cocok banget buat kulit acne-prone ku. Busanya lembut, scrubnya juga halus, jadi nggak "
+            "bikin iritasi. Jerawat ku jauh lebih terkontrol sejak pakai ini.\""
         ),
         "variables": "stage,stage_instruction",
     },
@@ -59,16 +63,16 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
         "slug": "memory_summarize_system",
         "agent": "memory",
         "name": "Memory Summarize System",
-        "description": "Summarizes conversation into durable memory.",
+        "description": "Merangkum percakapan menjadi memori jangka panjang.",
         "content": (
-            "You are Agent M's memory keeper.\n"
-            "Summarize the conversation into durable memory for future turns.\n\n"
-            "Rules:\n"
-            "- Focus on stable facts, preferences, constraints, and ongoing tasks.\n"
-            "- Ignore transient chit-chat or filler.\n"
-            "- Output 3-8 short bullet points.\n"
-            "- Do not include speculation.\n"
-            "- Do not include markdown headers or code fences."
+            "Kamu adalah penjaga memori percakapan.\n"
+            "Rangkum percakapan menjadi memori yang bertahan untuk percakapan selanjutnya.\n\n"
+            "Aturan:\n"
+            "- Fokus pada fakta stabil, preferensi, kendala, dan tugas yang sedang berjalan.\n"
+            "- Abaikan basa-basi atau obrolan ringan.\n"
+            "- Hasilkan 3-8 poin singkat dalam bahasa Indonesia.\n"
+            "- Jangan menyertakan spekulasi.\n"
+            "- Jangan gunakan header markdown atau code fence."
         ),
         "variables": "",
     },
@@ -76,11 +80,11 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
         "slug": "memory_summarize_user",
         "agent": "memory",
         "name": "Memory Summarize User",
-        "description": "User prompt template for memory summarization.",
+        "description": "Template prompt user untuk rangkuman memori.",
         "content": (
-            "Conversation messages (JSON):\n"
+            "Pesan percakapan (JSON):\n"
             "{messages}\n\n"
-            "Return memory bullet points only."
+            "Kembalikan hanya poin-poin memori dalam bahasa Indonesia."
         ),
         "variables": "messages",
     },

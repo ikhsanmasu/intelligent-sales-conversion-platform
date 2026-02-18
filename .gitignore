@@ -1,6 +1,4 @@
 .env
-.env.local
-.env.server
 .venv/
 __pycache__/
 *.pyc

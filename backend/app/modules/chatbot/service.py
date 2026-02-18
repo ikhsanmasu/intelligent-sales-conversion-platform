@@ -30,8 +30,51 @@ def _is_agent_enabled(agent_key: str, default: bool = True) -> bool:
     return str(value).strip().lower() not in _FALSE_VALUES
 
 
-def _collect_knowledge_context(question: str) -> dict[str, str]:
+_KNOWLEDGE_SKIP_STAGES = {
+    "greeting",
+    "opening",
+    "testimony",
+    "promo",
+    "closing",
+    "farewell",
+}
+
+_KNOWLEDGE_NEEDLE_KEYWORDS = {
+    "kandungan",
+    "ingredient",
+    "komposisi",
+    "bha",
+    "sulphur",
+    "bpom",
+    "halal",
+    "exp",
+    "cara pakai",
+    "pakainya",
+    "bahan",
+    "fungsi",
+}
+
+
+def _detect_stage_for_context(message: str, history: list[dict]) -> str:
+    """Lightweight stage detection to decide whether to call knowledge agents."""
+    from app.agents.planner.agent import PlannerAgent
+    intent = PlannerAgent._detect_intent(message)
+    state = PlannerAgent._build_state(history)
+    return PlannerAgent._resolve_stage(intent, state)
+
+
+def _collect_knowledge_context(
+    question: str, history: list[dict] | None = None,
+) -> dict[str, str]:
     context: dict[str, str] = {}
+
+    # Skip expensive agent calls except when consultation really needs extra facts.
+    stage = _detect_stage_for_context(question, history or [])
+    if stage in _KNOWLEDGE_SKIP_STAGES:
+        return context
+    lowered = (question or "").lower()
+    if not any(keyword in lowered for keyword in _KNOWLEDGE_NEEDLE_KEYWORDS):
+        return context
 
     if _is_agent_enabled("database", default=True):
         try:
@@ -68,7 +111,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         "conversation_id": request.conversation_id,
         "memory_summary": memory_summary,
     }
-    context.update(_collect_knowledge_context(request.message))
+    context.update(_collect_knowledge_context(request.message, history=history))
     result = planner.execute(request.message, history=history, context=context)
 
     if request.user_id:
@@ -112,15 +155,29 @@ def chat_stream(request: ChatRequest) -> Generator[str, None, None]:
         "conversation_id": request.conversation_id,
         "memory_summary": memory_summary,
     }
-    context.update(_collect_knowledge_context(request.message))
+    context.update(_collect_knowledge_context(request.message, history=history))
     full_content = ""
+    last_metadata = None
 
     for event in planner.execute_stream(request.message, history=history, context=context):
         if event.get("type") == "content":
             full_content += event.get("content", "")
+        if event.get("type") == "meta":
+            last_metadata = event.get("metadata")
         yield f"data: {json.dumps(event)}\n\n"
 
     yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    # Record billing for streaming path
+    if request.user_id and last_metadata:
+        try:
+            record_usage_event(
+                user_id=request.user_id,
+                conversation_id=request.conversation_id,
+                assistant_metadata=last_metadata,
+            )
+        except Exception:
+            pass
 
     if request.user_id and full_content:
         try:
