@@ -279,10 +279,10 @@ _KNOWLEDGE_BRIEF_STAGES = {"greeting", "farewell"}
 # Ordered stages for progression
 _STAGE_ORDER = ["greeting", "opening", "consultation", "testimony", "promo", "closing", "farewell"]
 
-_MAX_HISTORY_MESSAGES = 10
+_MAX_HISTORY_MESSAGES = 15
 
 _STAGE_COMPACT_GUIDANCE = {
-    "greeting": "Sapa + perkenalan: 'Aku Lia dari Mengantar.' Tanya nama SAJA. MAX 1-2 kalimat. JANGAN tanya yg lain.",
+    "greeting": "Sapa + perkenalan: 'Aku Ira Acneact Care Assistant yang siap membantu masalah kulit wajahmu.' Tanya nama SAJA. MAX 1-2 kalimat. JANGAN tanya yg lain.",
     "opening": "Sapa nama user, tanya santai ada keluhan kulit apa. MAX 1-2 kalimat. JANGAN sebut produk.",
     "consultation": "Empati dulu, tanya detail masalah. JANGAN langsung sebut produk/harga/ajak beli. MAX 2-3 kalimat.",
     "testimony": "Berikan 1 testimoni paling relevan. Berikan kedua jika diminta. MAX 2-3 kalimat + kutipan.",
