@@ -85,9 +85,9 @@ class ChatRepository:
             }
             if message.thinking:
                 payload["thinking"] = message.thinking
-            if message.role == "assistant" and message.metadata:
+            if message.role == "assistant" and message.llm_metadata:
                 try:
-                    payload["metadata"] = json.loads(message.metadata)
+                    payload["metadata"] = json.loads(message.llm_metadata)
                 except (json.JSONDecodeError, TypeError):
                     pass
             data["messages"].append(payload)
@@ -201,7 +201,7 @@ class ChatRepository:
                     role="assistant",
                     content=assistant_content,
                     thinking=assistant_thinking,
-                    metadata=json.dumps(assistant_metadata) if assistant_metadata else None,
+                    llm_metadata=json.dumps(assistant_metadata) if assistant_metadata else None,
                     created_at=now,
                 )
             )

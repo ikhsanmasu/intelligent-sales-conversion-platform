@@ -54,8 +54,8 @@ def get_db() -> Generator[Session, None, None]:
 
 
 _ADDITIVE_MIGRATIONS = [
-    # Add metadata column to existing chat_messages rows (idempotent).
-    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata TEXT",
+    # Add llm_metadata column to existing chat_messages rows (idempotent).
+    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS llm_metadata TEXT",
 ]
 
 
