@@ -188,14 +188,10 @@ class _WhatsAppTypingHeartbeat:
         return False
 
 
-def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: str) -> bool:
+def _should_attach_testimony_media(stage: str, assistant_text: str) -> bool:
+    """Send testimony images only when the LLM response itself mentions the testimonials."""
     if stage == "testimony":
         return True
-
-    lowered = (user_text or "").lower()
-    if any(token in lowered for token in {"testimoni", "review", "bukti"}):
-        return True
-
     return looks_like_testimony_reply(assistant_text)
 
 
@@ -319,7 +315,6 @@ def handle_webhook(payload: dict) -> dict:
 
                 is_testimony = _should_attach_testimony_media(
                     stage=stage,
-                    user_text=body,
                     assistant_text=raw_reply_text,
                 ) and raw_reply_text
 

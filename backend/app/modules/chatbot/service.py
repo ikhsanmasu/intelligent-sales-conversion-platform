@@ -95,8 +95,15 @@ def chat(request: ChatRequest) -> ChatResponse:
     }
     result = planner.execute(request.message, history=history, context=context)
 
+    # Inject cost into metadata (same as chat_stream path).
+    meta = dict(result.metadata or {})
+    cost = compute_usage_cost(meta)
+    if cost:
+        meta["cost"] = cost
+    result.metadata = meta
+
     # Inject testimony images for dashboard/API consumers
-    stage = (result.metadata or {}).get("stage", "")
+    stage = meta.get("stage", "")
     result.output = _maybe_append_testimony_images(result.output, stage)
 
     if request.user_id:

@@ -109,14 +109,10 @@ class _TelegramTypingHeartbeat:
         return False
 
 
-def _should_attach_testimony_media(stage: str, user_text: str, assistant_text: str) -> bool:
+def _should_attach_testimony_media(stage: str, assistant_text: str) -> bool:
+    """Send testimony images only when the LLM response itself mentions the testimonials."""
     if stage == "testimony":
         return True
-
-    lowered = (user_text or "").lower()
-    if any(token in lowered for token in {"testimoni", "review", "bukti"}):
-        return True
-
     return looks_like_testimony_reply(assistant_text)
 
 
@@ -157,7 +153,7 @@ def handle_webhook(payload: dict, secret_header: str | None = None) -> dict:
     stage = str(metadata.get("stage") or "").strip().lower()
     reply_text = str(result.get("reply_text") or "").strip()
 
-    if _should_attach_testimony_media(stage=stage, user_text=text, assistant_text=reply_text) and reply_text:
+    if _should_attach_testimony_media(stage=stage, assistant_text=reply_text) and reply_text:
         try:
             base_url = (settings.PUBLIC_BASE_URL or "").strip()
             images = get_testimony_images(base_url=base_url) if base_url else []
