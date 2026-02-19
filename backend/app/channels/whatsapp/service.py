@@ -17,6 +17,9 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 _whatsapp_polisher_agent = None
+_processed_inbound_ids: dict[str, float] = {}
+_processed_inbound_ids_lock = threading.Lock()
+_PROCESSED_INBOUND_TTL_SECONDS = 30 * 60
 
 
 def _get_whatsapp_api_context() -> tuple[str, str, str] | None:
@@ -31,6 +34,41 @@ def _get_whatsapp_api_context() -> tuple[str, str, str] | None:
         return None
 
     return access_token, phone_number_id, api_version
+
+
+def count_incoming_text_messages(payload: dict) -> int:
+    count = 0
+    for entry in (payload or {}).get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value") or {}
+            messages = value.get("messages") or []
+            for message in messages:
+                if message.get("type") != "text":
+                    continue
+                sender = str(message.get("from") or "").strip()
+                body = str((message.get("text") or {}).get("body") or "").strip()
+                if sender and body:
+                    count += 1
+    return count
+
+
+def _register_inbound_message_once(message_id: str) -> bool:
+    inbound_id = str(message_id or "").strip()
+    if not inbound_id:
+        return True
+
+    now = time.time()
+    cutoff = now - _PROCESSED_INBOUND_TTL_SECONDS
+    with _processed_inbound_ids_lock:
+        stale_ids = [k for k, ts in _processed_inbound_ids.items() if ts < cutoff]
+        for stale_id in stale_ids:
+            _processed_inbound_ids.pop(stale_id, None)
+
+        if inbound_id in _processed_inbound_ids:
+            return False
+
+        _processed_inbound_ids[inbound_id] = now
+    return True
 
 
 def _post_whatsapp_payload(payload: dict) -> None:
@@ -252,6 +290,14 @@ def handle_webhook(payload: dict) -> dict:
                 inbound_message_id = str(message.get("id") or "").strip()
                 body = str((message.get("text") or {}).get("body") or "").strip()
                 if not sender or not body:
+                    continue
+
+                if not _register_inbound_message_once(inbound_message_id):
+                    logger.info(
+                        "Skipping duplicate WhatsApp inbound message id=%s from=%s",
+                        inbound_message_id,
+                        sender,
+                    )
                     continue
 
                 try:

@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from app.channels.whatsapp.api_schemas import WhatsappWebhookResponse
-from app.channels.whatsapp.service import handle_webhook
+from app.channels.whatsapp.service import count_incoming_text_messages, handle_webhook
 from app.core.config import settings
 
 router = APIRouter(tags=["Channels"], prefix="/v1/channels/whatsapp")
@@ -25,7 +25,12 @@ async def verify_whatsapp_webhook(
 
 
 @router.post("/webhook", response_model=WhatsappWebhookResponse)
-async def whatsapp_webhook_endpoint(request: Request):
+async def whatsapp_webhook_endpoint(request: Request, background_tasks: BackgroundTasks):
     payload = await request.json()
-    return handle_webhook(payload=payload)
-
+    queued = count_incoming_text_messages(payload)
+    background_tasks.add_task(handle_webhook, payload)
+    return WhatsappWebhookResponse(
+        status="accepted",
+        processed_messages=queued,
+        detail="WhatsApp webhook accepted",
+    )
