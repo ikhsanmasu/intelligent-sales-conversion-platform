@@ -194,28 +194,46 @@ def _build_whatsapp_bubbles(user_text: str, assistant_text: str, stage: str) -> 
 
 def _outbound_bubble_delay(text: str, first: bool) -> float:
     base = natural_read_delay(text)
-    delay = min(2.4, max(0.45, base * 0.45))
-    if not first:
-        delay = min(1.8, max(0.3, delay * 0.8))
+    if first:
+        delay = min(3.2, max(1.0, base * 0.55))
+    else:
+        delay = min(2.6, max(0.85, base * 0.42))
     return delay
 
 
+def _between_bubble_delay(text: str) -> float:
+    base = natural_read_delay(text)
+    return min(1.6, max(0.45, base * 0.18))
+
+
 def _send_whatsapp_bubbles(recipient: str, bubbles: list[str], inbound_message_id: str) -> None:
-    for index, bubble in enumerate(bubbles):
-        body = str(bubble or "").strip()
-        if not body:
-            continue
-
+    prepared = [str(bubble or "").strip() for bubble in bubbles if str(bubble or "").strip()]
+    total = len(prepared)
+    for index, body in enumerate(prepared):
+        delay = _outbound_bubble_delay(body, first=index == 0)
         try:
-            _send_whatsapp_typing_indicator(inbound_message_id)
+            with _WhatsAppTypingHeartbeat(
+                message_id=inbound_message_id,
+                interval_seconds=3.0,
+                minimum_visible_seconds=delay,
+            ):
+                time.sleep(delay)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to send typing indicator before WhatsApp bubble: %s", exc)
+            logger.warning("Failed to keep typing heartbeat before WhatsApp bubble: %s", exc)
+            try:
+                _send_whatsapp_typing_indicator(inbound_message_id)
+            except Exception:
+                pass
+            time.sleep(delay)
 
-        time.sleep(_outbound_bubble_delay(body, first=index == 0))
         try:
             _send_whatsapp_message(recipient=recipient, text=body)
         except Exception as exc:  # noqa: BLE001
-            logger.error("Failed to send WhatsApp bubble %d/%d: %s", index + 1, len(bubbles), exc)
+            logger.error("Failed to send WhatsApp bubble %d/%d: %s", index + 1, total, exc)
+
+        # Small pause after each bubble so the next one does not look machine-burst.
+        if index < total - 1:
+            time.sleep(_between_bubble_delay(body))
 
 
 def handle_webhook(payload: dict) -> dict:
