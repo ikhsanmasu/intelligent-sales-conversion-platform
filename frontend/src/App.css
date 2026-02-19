@@ -858,6 +858,12 @@ body {
   background: var(--surface-soft);
 }
 
+.token-meta .token-cost {
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #6366f1);
+  font-weight: 500;
+}
+
 .toggle-wrap {
   position: relative;
   display: inline-flex;

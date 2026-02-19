@@ -6,7 +6,7 @@ from app.agents.memory import create_memory_agent
 from app.agents.memory.store import get_memory_summary
 from app.agents.planner import create_planner_agent
 from app.channels.media import build_testimony_markdown_images, looks_like_testimony_reply
-from app.modules.billing.service import record_usage_event
+from app.modules.billing.service import compute_usage_cost, record_usage_event
 from app.modules.chatbot.repository import ChatRepository
 from app.modules.chatbot.schemas import ChatRequest, ChatResponse
 
@@ -147,7 +147,12 @@ def chat_stream(request: ChatRequest) -> Generator[str, None, None]:
         if event.get("type") == "content":
             full_content += event.get("content", "")
         if event.get("type") == "meta":
-            last_metadata = event.get("metadata")
+            meta = event.get("metadata") or {}
+            cost = compute_usage_cost(meta)
+            if cost:
+                meta = {**meta, "cost": cost}
+                event = {**event, "metadata": meta}
+            last_metadata = meta
         yield f"data: {json.dumps(event)}\n\n"
 
     # Inject testimony images at end of stream for dashboard rendering

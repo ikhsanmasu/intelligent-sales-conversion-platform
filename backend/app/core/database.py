@@ -53,6 +53,21 @@ def get_db() -> Generator[Session, None, None]:
         yield session
 
 
+_ADDITIVE_MIGRATIONS = [
+    # Add metadata column to existing chat_messages rows (idempotent).
+    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS metadata TEXT",
+]
+
+
+def _run_migrations() -> None:
+    with app_engine.begin() as conn:
+        for sql in _ADDITIVE_MIGRATIONS:
+            try:
+                conn.execute(text(sql))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Migration skipped (%s): %s", sql[:60], exc)
+
+
 def init_app_database() -> None:
     logger.info("Initializing app database on %s", _safe_url(app_engine.url))
     ensure_app_database_exists()
@@ -76,6 +91,7 @@ def init_app_database() -> None:
         AgentMemory,
     )
     SQLModel.metadata.create_all(app_engine)
+    _run_migrations()
     logger.info("Application tables are ready on %s", _safe_url(app_engine.url))
 
 

@@ -28,6 +28,7 @@ class ConversationMessage(SQLModel, table=True):
     role: str
     content: str
     thinking: Optional[str] = None
+    metadata: Optional[str] = None  # JSON-encoded assistant metadata (tokens, cost, model)
     created_at: float = Field(default_factory=time.time)
 
     conversation: Optional[Conversation] = Relationship(back_populates="messages")

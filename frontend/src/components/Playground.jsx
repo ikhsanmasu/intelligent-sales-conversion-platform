@@ -440,25 +440,42 @@ function ThinkingSpinner() {
   );
 }
 
+function formatCostUsd(usd) {
+  if (usd == null) return null;
+  if (usd === 0) return "$0.00";
+  if (usd < 0.000001) return "<$0.000001";
+  if (usd < 0.0001) return `$${usd.toFixed(6)}`;
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(3)}`;
+}
+
 function TokenMeta({ metadata }) {
   const usage = metadata?.usage || {};
   const model = metadata?.model || {};
+  const cost = metadata?.cost || {};
   const inputTokens = usage.input_tokens ?? usage.prompt_tokens;
   const outputTokens = usage.output_tokens ?? usage.completion_tokens;
   const totalTokens = usage.total_tokens;
+  const totalCost = cost.total_cost_usd;
+  const pricingSource = cost.pricing_source;
 
   return (
     <div className="token-meta">
       {(model?.provider || model?.name) && (
-        <span>
-          Model: {model?.provider || "-"}
-          {model?.name ? `/${model.name}` : ""}
-        </span>
+        <span>{model?.provider || "-"}/{model?.name || "-"}</span>
       )}
-      {metadata?.stage ? <span>Tahap: {metadata.stage}</span> : null}
-      {inputTokens !== undefined ? <span>Input: {inputTokens}</span> : null}
-      {outputTokens !== undefined ? <span>Output: {outputTokens}</span> : null}
-      {totalTokens !== undefined ? <span>Total: {totalTokens}</span> : null}
+      {metadata?.stage ? <span>{metadata.stage}</span> : null}
+      {inputTokens !== undefined ? <span title="Input tokens">↑{inputTokens}</span> : null}
+      {outputTokens !== undefined ? <span title="Output tokens">↓{outputTokens}</span> : null}
+      {totalTokens !== undefined ? <span title="Total tokens">∑{totalTokens}</span> : null}
+      {totalCost != null ? (
+        <span
+          className="token-cost"
+          title={pricingSource ? `Pricing: ${pricingSource}` : "Estimated cost"}
+        >
+          {formatCostUsd(totalCost)}
+        </span>
+      ) : null}
     </div>
   );
 }

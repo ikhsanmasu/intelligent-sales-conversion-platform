@@ -7,7 +7,6 @@ import httpx
 from app.agents.whatsapp import create_whatsapp_polisher_agent
 from app.channels.common import natural_read_delay, process_incoming_text
 from app.channels.media import (
-    format_testimony_reply_text,
     format_whatsapp_reply_text,
     get_testimony_images,
     looks_like_testimony_reply,
@@ -318,11 +317,44 @@ def handle_webhook(payload: dict) -> dict:
                 raw_reply_text = str(result.get("reply_text") or "").strip()
                 final_text = format_whatsapp_reply_text(raw_reply_text)
 
-                if _should_attach_testimony_media(
+                is_testimony = _should_attach_testimony_media(
                     stage=stage,
                     user_text=body,
                     assistant_text=raw_reply_text,
-                ) and raw_reply_text:
+                ) and raw_reply_text
+
+                bubbles: list[str] = []
+                if final_text:
+                    try:
+                        with _WhatsAppTypingHeartbeat(
+                            message_id=inbound_message_id,
+                            interval_seconds=4.0,
+                            minimum_visible_seconds=0.6,
+                        ):
+                            bubbles = _build_whatsapp_bubbles(
+                                user_text=body,
+                                assistant_text=final_text,
+                                stage=stage,
+                            )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Failed to prepare WhatsApp bubbles: %s", exc)
+                        bubbles = split_whatsapp_bubbles(final_text)
+                    if not bubbles:
+                        bubbles = split_whatsapp_bubbles(final_text)
+
+                if is_testimony:
+                    # 1. Send LLM intro bubbles first so text arrives before images.
+                    if bubbles:
+                        try:
+                            _send_whatsapp_bubbles(
+                                recipient=sender,
+                                bubbles=bubbles,
+                                inbound_message_id=inbound_message_id,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            logger.exception("Failed to send WhatsApp testimony intro bubbles: %s", exc)
+
+                    # 2. Send images after the intro text.
                     try:
                         base_url = (settings.PUBLIC_BASE_URL or "").strip()
                         if not base_url:
@@ -352,44 +384,18 @@ def handle_webhook(payload: dict) -> dict:
                                     image.image_url,
                                     media_exc,
                                 )
-
-                        final_text = format_whatsapp_reply_text(
-                            format_testimony_reply_text(raw_reply_text)
-                        )
                     except Exception as exc:  # noqa: BLE001
                         logger.exception("Failed to send WhatsApp testimonial media: %s", exc)
-                        final_text = format_whatsapp_reply_text(
-                            format_testimony_reply_text(raw_reply_text)
-                        )
-
-                bubbles: list[str] = []
-                if final_text:
-                    try:
-                        with _WhatsAppTypingHeartbeat(
-                            message_id=inbound_message_id,
-                            interval_seconds=4.0,
-                            minimum_visible_seconds=0.6,
-                        ):
-                            bubbles = _build_whatsapp_bubbles(
-                                user_text=body,
-                                assistant_text=final_text,
-                                stage=stage,
+                else:
+                    if bubbles:
+                        try:
+                            _send_whatsapp_bubbles(
+                                recipient=sender,
+                                bubbles=bubbles,
+                                inbound_message_id=inbound_message_id,
                             )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Failed to prepare WhatsApp bubbles: %s", exc)
-                        bubbles = split_whatsapp_bubbles(final_text)
-                    if not bubbles:
-                        bubbles = split_whatsapp_bubbles(final_text)
-
-                if bubbles:
-                    try:
-                        _send_whatsapp_bubbles(
-                            recipient=sender,
-                            bubbles=bubbles,
-                            inbound_message_id=inbound_message_id,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.exception("Failed to send WhatsApp bubble replies: %s", exc)
+                        except Exception as exc:  # noqa: BLE001
+                            logger.exception("Failed to send WhatsApp bubble replies: %s", exc)
 
                 processed_messages += 1
 

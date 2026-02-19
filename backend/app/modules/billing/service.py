@@ -157,6 +157,24 @@ def _extract_usage_payload(
     return provider, model, input_tokens, output_tokens, total_tokens
 
 
+def compute_usage_cost(assistant_metadata: dict | None) -> dict | None:
+    """Return cost breakdown to enrich stream meta events. None if no usage data."""
+    payload = _extract_usage_payload(assistant_metadata)
+    if payload is None:
+        return None
+    provider, model, input_tokens, output_tokens, total_tokens = payload
+    input_rate, output_rate, pricing_source = _resolve_pricing(provider, model)
+    input_cost = round((input_tokens / 1_000_000.0) * input_rate, 8)
+    output_cost = round((output_tokens / 1_000_000.0) * output_rate, 8)
+    total_cost = round(input_cost + output_cost, 8)
+    return {
+        "input_cost_usd": input_cost,
+        "output_cost_usd": output_cost,
+        "total_cost_usd": total_cost,
+        "pricing_source": pricing_source,
+    }
+
+
 def record_usage_event(
     user_id: str,
     conversation_id: str,

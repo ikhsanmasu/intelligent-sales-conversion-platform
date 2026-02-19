@@ -26,6 +26,7 @@ class MessageSchema(BaseModel):
     role: str
     content: str
     thinking: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
     created_at: Optional[float] = None
 
 

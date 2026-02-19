@@ -1,3 +1,4 @@
+import json
 import time
 
 from sqlmodel import Session, delete, select
@@ -84,6 +85,11 @@ class ChatRepository:
             }
             if message.thinking:
                 payload["thinking"] = message.thinking
+            if message.role == "assistant" and message.metadata:
+                try:
+                    payload["metadata"] = json.loads(message.metadata)
+                except (json.JSONDecodeError, TypeError):
+                    pass
             data["messages"].append(payload)
         return data
 
@@ -171,7 +177,6 @@ class ChatRepository:
         assistant_thinking: str | None = None,
         assistant_metadata: dict | None = None,
     ) -> bool:
-        _ = assistant_metadata
         with Session(self.engine) as session:
             conversation = session.exec(
                 select(Conversation)
@@ -196,6 +201,7 @@ class ChatRepository:
                     role="assistant",
                     content=assistant_content,
                     thinking=assistant_thinking,
+                    metadata=json.dumps(assistant_metadata) if assistant_metadata else None,
                     created_at=now,
                 )
             )

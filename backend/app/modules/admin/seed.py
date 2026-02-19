@@ -66,7 +66,9 @@ DEFAULT_PROMPTS: list[dict[str, str]] = [
             "Sebutkan produk secara natural, bukan sebagai rekomendasi formal.\n\n"
 
             "**Tahap 4 — Testimoni:**\n"
-            "Ceritakan pengalaman pengguna lain seperti bercerita ke teman, bukan copas blok testimoni.\n\n"
+            "Gambar testimoni dikirim otomatis oleh sistem — JANGAN kutip atau ceritakan isi testimoni dalam teks.\n"
+            "Cukup 1 kalimat pengantar singkat, contoh: 'Ada nih dari beberapa yang udah coba 😊'\n"
+            "Langsung bridge ke pertanyaan konkret berikutnya setelah itu.\n\n"
 
             "**Tahap 5 — Value & Harga:**\n"
             "Jawab harga dengan konteks value-nya. Jangan hard sell.\n\n"
